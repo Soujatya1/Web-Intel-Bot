@@ -7,7 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.document_loaders import WebBaseLoader
-
+from langchain.schema import Document
 # Streamlit UI
 st.title("Website Intelligence")
 
@@ -35,9 +35,14 @@ for website in websites:
         docs = loader.load()
 
         for doc in docs:
-            doc.metadata["source"] = website
-
-        loaded_docs.extend(docs)
+            # Ensure doc is a LangChain Document
+            if isinstance(doc, str):  
+                doc = Document(page_content=doc, metadata={"source": website})
+            elif isinstance(doc, Document):
+                doc.metadata["source"] = website
+            
+            loaded_docs.append(doc)
+    
     except Exception as e:
         st.write(f"Error loading {website}: {e}")
 
@@ -75,19 +80,23 @@ text_splitter = RecursiveCharacterTextSplitter(
     length_function=len,
 )
 
-document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
+# Check if documents are loaded before processing
+if st.session_state.loaded_docs:
+    document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
 
-# Stuff Document Chain Creation
-document_chain = create_stuff_documents_chain(llm, prompt)
+    # Stuff Document Chain Creation
+    document_chain = create_stuff_documents_chain(llm, prompt)
 
-# Save document chain to session state
-st.session_state.retrieval_chain = document_chain
+    # Save document chain to session state
+    st.session_state.retrieval_chain = document_chain
 
 query = st.text_input("Enter your query:")
 if st.button("Get Answer"):
-    if query:
-        # Directly pass the documents to the chain without using a retriever
-        context = "\n".join([doc.page_content for doc in st.session_state.loaded_docs])
+    if query and st.session_state.loaded_docs:
+        # Create context from loaded documents
+        context = "\n".join([doc.page_content for doc in st.session_state.loaded_docs if hasattr(doc, "page_content")])
+
+        # Invoke retrieval chain
         response = st.session_state.retrieval_chain.invoke({"input": query, "context": context})
 
         # Display response
