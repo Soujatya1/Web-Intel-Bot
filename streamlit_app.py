@@ -7,7 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.document_loaders import WebBaseLoader
-from langchain.schema import Document  # Ensure documents are properly formatted
+from langchain.schema import Document  # Import Document schema to format data properly
 
 # Streamlit UI
 st.title("Website Intelligence")
@@ -18,7 +18,6 @@ if "loaded_docs" not in st.session_state:
 if "retrieval_chain" not in st.session_state:
     st.session_state.retrieval_chain = None
 
-# Hardcoded websites
 websites = ["https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"]
 
 loaded_docs = []
@@ -31,14 +30,14 @@ for website in websites:
         docs = loader.load()
 
         for doc in docs:
-            # Ensure doc is a LangChain Document
             if isinstance(doc, str):  
+                # Wrap raw text inside a Document
                 doc = Document(page_content=doc, metadata={"source": website})
             elif isinstance(doc, Document):
-                doc.metadata["source"] = website
-            
+                doc.metadata["source"] = website  # Ensure metadata is set
+
             loaded_docs.append(doc)
-    
+
     except Exception as e:
         st.write(f"Error loading {website}: {e}")
 
@@ -58,9 +57,9 @@ llm = ChatGroq(
 # ChatPrompt Template
 prompt = ChatPromptTemplate.from_template(
     """
-    You are a Website Intelligence specialist who answers questions as asked from the websites uploaded.
+    You are a Website Intelligence specialist who answers questions from the websites provided.
 
-    Please answer precisely and also extract hyperlinks and display, if applicable.
+    Please answer precisely and include hyperlinks where applicable.
 
     <context>
     {context}
@@ -76,7 +75,7 @@ text_splitter = RecursiveCharacterTextSplitter(
     length_function=len,
 )
 
-# Check if documents are loaded before processing
+# Ensure documents are loaded before processing
 if st.session_state.loaded_docs:
     document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
 
@@ -89,8 +88,10 @@ if st.session_state.loaded_docs:
 query = st.text_input("Enter your query:")
 if st.button("Get Answer"):
     if query and st.session_state.loaded_docs:
-        # Create context from loaded documents
-        context = "\n".join([doc.page_content for doc in st.session_state.loaded_docs if hasattr(doc, "page_content")])
+        # Create context only from valid documents
+        context = "\n".join(
+            [doc.page_content for doc in st.session_state.loaded_docs if hasattr(doc, "page_content")]
+        )
 
         # Invoke retrieval chain
         response = st.session_state.retrieval_chain.invoke({"input": query, "context": context})
