@@ -7,7 +7,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.document_loaders import WebBaseLoader
-from langchain.schema import Document
+from langchain.schema import Document  # Ensure documents are properly formatted
+
 # Streamlit UI
 st.title("Website Intelligence")
 
@@ -19,10 +20,10 @@ if "retrieval_chain" not in st.session_state:
 
 # Hardcoded websites
 websites = [
-    "https://irdai.gov.in/",
-    "https://egazette.gov.in/",
-    "https://enforcementdirectorate.gov.in/pmla",
-    "https://uidai.gov.in/"
+    "https://irdai.gov.in/",
+    "https://egazette.gov.in/",
+    "https://enforcementdirectorate.gov.in/pmla",
+    "https://uidai.gov.in/"
 ]
 
 loaded_docs = []
