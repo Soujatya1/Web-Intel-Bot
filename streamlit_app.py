@@ -18,6 +18,7 @@ if "loaded_docs" not in st.session_state:
 if "retrieval_chain" not in st.session_state:
     st.session_state.retrieval_chain = None
 
+# Hardcoded websites
 websites = ["https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"]
 
 loaded_docs = []
@@ -29,13 +30,21 @@ for website in websites:
         loader = WebBaseLoader(website)
         docs = loader.load()
 
-        for doc in docs:
-            if isinstance(doc, str):  
-                # Wrap raw text inside a Document
-                doc = Document(page_content=doc, metadata={"source": website})
-            elif isinstance(doc, Document):
-                doc.metadata["source"] = website  # Ensure metadata is set
+        # Debug: Check what type docs is returning
+        st.write(f"Loaded docs from {website}: {type(docs)}")
 
+        # Handle docs based on their type
+        if isinstance(docs, list):  # If docs is a list of documents (expected case)
+            for doc in docs:
+                if isinstance(doc, str):  
+                    # Wrap raw text inside a Document
+                    doc = Document(page_content=doc, metadata={"source": website})
+                elif isinstance(doc, Document):
+                    doc.metadata["source"] = website  # Ensure metadata is set
+
+                loaded_docs.append(doc)
+        elif isinstance(docs, str):  # In case it's just raw text
+            doc = Document(page_content=docs, metadata={"source": website})
             loaded_docs.append(doc)
 
     except Exception as e:
