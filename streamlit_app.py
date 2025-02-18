@@ -19,12 +19,7 @@ if "retrieval_chain" not in st.session_state:
     st.session_state.retrieval_chain = None
 
 # Hardcoded websites
-websites = [
-    "https://irdai.gov.in/",
-    "https://egazette.gov.in/",
-    "https://enforcementdirectorate.gov.in/pmla",
-    "https://uidai.gov.in/"
-]
+websites = ["https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"]
 
 loaded_docs = []
 
