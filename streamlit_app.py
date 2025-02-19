@@ -7,7 +7,9 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.document_loaders import WebBaseLoader
-from langchain.schema import Document  # Import Document schema to format data properly
+from langchain.schema import Document
+import requests
+from bs4 import BeautifulSoup
 
 # Streamlit UI
 st.title("Website Intelligence")
@@ -23,28 +25,27 @@ websites = ["https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforc
 
 loaded_docs = []
 
+def fetch_website_content(url):
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            return soup.get_text()
+        else:
+            return f"Failed to fetch {url}, Status Code: {response.status_code}"
+    except Exception as e:
+        return f"Error: {e}"
+
 # Load content from websites
 for website in websites:
-    try:
-        st.write(f"Fetching content from: {website}")
-        loader = WebBaseLoader(website)
-        docs = loader.load()
+    st.write(f"Fetching content from: {website}")
+    content = fetch_website_content(website)
 
-        # Debug: Check what type docs is returning
-        st.write(f"Loaded docs from {website}: {type(docs)}")
-
-        # Handle docs based on their type
-        if isinstance(docs, list):  
-            for content in docs:
-                if isinstance(content, str):  
-                    doc = Document(page_content=content, metadata={"source": website})
-                    loaded_docs.append(doc)
-        elif isinstance(docs, str):  
-            doc = Document(page_content=docs, metadata={"source": website})
-            loaded_docs.append(doc)
-
-    except Exception as e:
-        st.write(f"Error loading {website}: {e}")
+    if content and "Failed" not in content and "Error" not in content:
+        doc = Document(page_content=content, metadata={"source": website})
+        loaded_docs.append(doc)
+    else:
+        st.write(f"Could not fetch content from: {website}")
 
 st.write(f"Loaded documents: {len(loaded_docs)}")
 
