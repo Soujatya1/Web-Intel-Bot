@@ -23,8 +23,6 @@ if "retrieval_chain" not in st.session_state:
 # Hardcoded websites
 websites = ["https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"]
 
-loaded_docs = []
-
 def fetch_website_content(url):
     try:
         response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -36,20 +34,31 @@ def fetch_website_content(url):
     except Exception as e:
         return f"Error: {e}"
 
-# Load content from websites
+loaded_docs = []
+
 for website in websites:
-    st.write(f"Fetching content from: {website}")
-    content = fetch_website_content(website)
+    try:
+        st.write(f"Fetching content from: {website}")
+        loader = WebBaseLoader(website)
+        docs = loader.load()
 
-    if content and "Failed" not in content and "Error" not in content:
-        doc = Document(page_content=content, metadata={"source": website})
-        loaded_docs.append(doc)
-    else:
-        st.write(f"Could not fetch content from: {website}")
+        # Debugging step: Check what docs contains
+        st.write(f"Loaded from {website}: {type(docs)}, Length: {len(docs)}")
 
-st.write(f"Loaded documents: {len(loaded_docs)}")
+        if isinstance(docs, list):  # If WebBaseLoader returns a list
+            for content in docs:
+                if isinstance(content, Document):  
+                    content.metadata["source"] = website  # Ensure metadata is set
+                    loaded_docs.append(content)
+                elif isinstance(content, str):  
+                    loaded_docs.append(Document(page_content=content, metadata={"source": website}))
+        elif isinstance(docs, str):  
+            loaded_docs.append(Document(page_content=docs, metadata={"source": website}))
 
-# Store loaded documents in session state
+    except Exception as e:
+        st.write(f"Error loading {website}: {e}")
+
+st.write(f"Total Loaded Documents: {len(loaded_docs)}")
 st.session_state.loaded_docs = loaded_docs
 
 # LLM Initialization
@@ -81,6 +90,10 @@ text_splitter = RecursiveCharacterTextSplitter(
     length_function=len,
 )
 
+if st.session_state.loaded_docs:
+    document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
+    st.write(f"Total Document Chunks: {len(document_chunks)}")
+
 # Ensure documents are loaded before processing
 if st.session_state.loaded_docs:
     document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
@@ -92,21 +105,17 @@ if st.session_state.loaded_docs:
     st.session_state.retrieval_chain = document_chain
 
 query = st.text_input("Enter your query:")
-if st.button("Get Answer"):
-    if query and st.session_state.loaded_docs:
-        # Create context only from valid documents
-        context = "\n".join(
-            [doc.page_content for doc in st.session_state.loaded_docs if hasattr(doc, "page_content")]
-        )
+if query and st.session_state.loaded_docs:
+    context = "\n".join(
+        [doc.page_content for doc in st.session_state.loaded_docs if isinstance(doc, Document)]
+    )
 
-        # Invoke retrieval chain
-        response = st.session_state.retrieval_chain.invoke({"input": query, "context": context})
+    response = st.session_state.retrieval_chain.invoke({"input": query, "context": context})
 
-        # Display response
-        st.write("Response:")
-        if isinstance(response, dict) and "answer" in response:
-            st.write(response["answer"])
-        else:
-            st.write("Here's your response!")
+    st.write("Response:")
+    if isinstance(response, dict) and "answer" in response:
+        st.write(response["answer"])
     else:
-        st.write("No documents loaded. Please check the website fetching.")
+        st.write("Here's your response!")
+else:
+    st.write("No documents loaded. Please check the website fetching.")
