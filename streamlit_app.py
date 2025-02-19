@@ -34,16 +34,12 @@ for website in websites:
         st.write(f"Loaded docs from {website}: {type(docs)}")
 
         # Handle docs based on their type
-        if isinstance(docs, list):  # If docs is a list of documents (expected case)
-            for doc in docs:
-                if isinstance(doc, str):  
-                    # Wrap raw text inside a Document
-                    doc = Document(page_content=doc, metadata={"source": website})
-                elif isinstance(doc, Document):
-                    doc.metadata["source"] = website  # Ensure metadata is set
-
-                loaded_docs.append(doc)
-        elif isinstance(docs, str):  # In case it's just raw text
+        if isinstance(docs, list):  
+            for content in docs:
+                if isinstance(content, str):  
+                    doc = Document(page_content=content, metadata={"source": website})
+                    loaded_docs.append(doc)
+        elif isinstance(docs, str):  
             doc = Document(page_content=docs, metadata={"source": website})
             loaded_docs.append(doc)
 
