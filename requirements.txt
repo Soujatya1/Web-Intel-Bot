@@ -10,3 +10,4 @@ requests
 lxml
 aiohttp
 asyncio
+bs4
