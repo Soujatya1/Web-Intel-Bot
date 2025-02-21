@@ -15,7 +15,7 @@ import time
 from urllib.parse import urljoin, urlparse
 
 st.title("Web Content GeN-ie")
-st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
+st.subheader("Chat with Web Content!")
 
 template = """
 You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
@@ -24,17 +24,13 @@ Question: {question}
 Context: {context} 
 Answer:
 """
-
-# List of starting websites to crawl
 WEBSITES = [
     "https://irdai.gov.in/rules"
 ]
 
-# Initialize embeddings and vector store
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = InMemoryVectorStore(embeddings)
 
-# Initialize the Groq model
 model = ChatGroq(
     groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
@@ -110,7 +106,6 @@ def crawl_website(start_url, max_depth=1):
             st.write(f"Crawled: {url}")
         
         try:
-            # Get links from the page using requests for speed
             response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             soup = BeautifulSoup(response.content, "html.parser")
             for link in soup.find_all("a", href=True):
@@ -175,7 +170,7 @@ if "web_content_indexed" not in st.session_state:
         st.error("Failed to load web content.")
 
 # Chat interface
-question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
+question = st.chat_input("Ask a question:")
 
 if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
