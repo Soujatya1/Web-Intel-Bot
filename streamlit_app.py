@@ -93,7 +93,7 @@ def fetch_web_content(url):
         st.error(f"Selenium failed for {url}: {str(e)}")
         return None
 
-def crawl_website(start_url, max_depth=1):
+def crawl_website(start_url, max_depth=0):
     """Crawl a website recursively up to a specified depth."""
     visited = set()
     documents = []
