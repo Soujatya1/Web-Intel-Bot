@@ -11,3 +11,4 @@ lxml
 aiohttp
 asyncio
 bs4
+selenium
