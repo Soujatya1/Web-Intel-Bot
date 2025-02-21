@@ -27,8 +27,7 @@ Answer:
 
 # List of starting websites to crawl
 WEBSITES = [
-    "https://enforcementdirectorate.gov.in/pmla",
-    "https://enforcementdirectorate.gov.in/pmla?page=1"
+    "https://enforcementdirectorate.gov.in/pmla"
 ]
 
 # Initialize embeddings and vector store
