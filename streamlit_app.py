@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from langchain_community.document_loaders.base import Document
+from langchain_core.documents.base import Document  # Corrected import
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_groq import ChatGroq
