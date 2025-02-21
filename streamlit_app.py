@@ -27,10 +27,7 @@ Answer:
 
 # List of starting websites to crawl
 WEBSITES = [
-    "https://irdai.gov.in/",
-    "https://egazette.gov.in/(S(lufjdvwtjyccc2f2zvso5uvb))/default.aspx#",
-    "https://enforcementdirectorate.gov.in/pmla",
-    "https://uidai.gov.in/"
+    "https://enforcementdirectorate.gov.in/pmla?page=1"
 ]
 
 # Initialize embeddings and vector store
