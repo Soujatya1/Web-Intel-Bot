@@ -12,3 +12,4 @@ aiohttp
 asyncio
 bs4
 selenium
+webdriver_manager
