@@ -27,6 +27,7 @@ Answer:
 
 # List of starting websites to crawl
 WEBSITES = [
+    "https://enforcementdirectorate.gov.in/pmla?page=0",
     "https://enforcementdirectorate.gov.in/pmla?page=1"
 ]
 
