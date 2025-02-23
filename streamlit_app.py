@@ -12,10 +12,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import time
-from urllib.parse import urljoin, urlparse
 
 st.title("Web Content GeN-ie")
-st.subheader("Chat with Web Content!")
+st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
 
 template = """
 You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
@@ -24,13 +23,21 @@ Question: {question}
 Context: {context} 
 Answer:
 """
+
+# List of specific websites to load (no crawling beyond these)
 WEBSITES = [
-    "https://irdai.gov.in/rules"
+    "https://irdai.gov.in/",
+    "https://egazette.gov.in/(S(lufjdvwtjyccc2f2zvso5uvb))/default.aspx#",
+    "https://enforcementdirectorate.gov.in/pmla?page=1",
+    "https://enforcementdirectorate.gov.in/pmla?page=2",
+    "https://uidai.gov.in/"
 ]
 
+# Initialize embeddings and vector store
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = InMemoryVectorStore(embeddings)
 
+# Initialize the Groq model
 model = ChatGroq(
     groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
@@ -72,7 +79,7 @@ def fetch_web_content(url):
     try:
         driver = setup_selenium()
         driver.get(url)
-        time.sleep(3)  # Wait for JS to load
+        time.sleep(3)
         soup = BeautifulSoup(driver.page_source, "html.parser")
         driver.quit()
         
@@ -89,42 +96,14 @@ def fetch_web_content(url):
         st.error(f"Selenium failed for {url}: {str(e)}")
         return None
 
-def crawl_website(start_url, max_depth=1):
-    """Crawl a website recursively up to a specified depth."""
-    visited = set()
-    documents = []
-    base_domain = urlparse(start_url).netloc
-    
-    def crawl(url, depth):
-        if depth > max_depth or url in visited:
-            return
-        visited.add(url)
-        
-        doc = fetch_web_content(url)
-        if doc:
-            documents.append(doc)
-            st.write(f"Crawled: {url}")
-        
-        try:
-            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            soup = BeautifulSoup(response.content, "html.parser")
-            for link in soup.find_all("a", href=True):
-                absolute_url = urljoin(url, link["href"])
-                if urlparse(absolute_url).netloc == base_domain and absolute_url not in visited:
-                    crawl(absolute_url, depth + 1)
-        except Exception as e:
-            st.warning(f"Failed to fetch links from {url}: {str(e)}")
-    
-    crawl(start_url, 0)
-    return documents
-
 def load_web_content():
-    """Load content from all specified websites by crawling."""
+    """Load content only from the specified websites, no crawling."""
     all_documents = []
     for url in WEBSITES:
-        st.write(f"Starting crawl for {url}...")
-        documents = crawl_website(url, max_depth=2)
-        all_documents.extend(documents)
+        st.write(f"Loading: {url}...")
+        doc = fetch_web_content(url)
+        if doc:
+            all_documents.append(doc)
     return all_documents
 
 def split_text(documents):
@@ -165,12 +144,12 @@ if "web_content_indexed" not in st.session_state:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Indexed {len(all_documents)} pages.")
+        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages.")
     else:
         st.error("Failed to load web content.")
 
 # Chat interface
-question = st.chat_input("Ask a question:")
+question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
 if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
