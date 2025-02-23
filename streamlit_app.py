@@ -26,8 +26,7 @@ Answer:
 
 # List of specific websites to load (no crawling beyond these)
 WEBSITES = [
-    "https://enforcementdirectorate.gov.in/pmla?page=1",
-    "https://enforcementdirectorate.gov.in/pmla?page=0"
+    "https://irdai.gov.in/rules"
 ]
 
 # Initialize embeddings and vector store
