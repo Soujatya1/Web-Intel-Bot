@@ -26,11 +26,8 @@ Answer:
 
 # List of specific websites to load (no crawling beyond these)
 WEBSITES = [
-    "https://irdai.gov.in/",
-    "https://egazette.gov.in/(S(lufjdvwtjyccc2f2zvso5uvb))/default.aspx#",
     "https://enforcementdirectorate.gov.in/pmla?page=1",
-    "https://enforcementdirectorate.gov.in/pmla?page=2",
-    "https://uidai.gov.in/"
+    "https://enforcementdirectorate.gov.in/pmla?page=0"
 ]
 
 # Initialize embeddings and vector store
