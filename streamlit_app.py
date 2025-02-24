@@ -113,7 +113,7 @@ def split_text(documents):
 
 def index_docs(documents):
     """Index documents into the vector store."""
-    vector_store.add_documents(documents)
+    vector_store.add_documents(all_documents)
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
