@@ -50,52 +50,32 @@ def setup_selenium():
     return driver
 
 def fetch_web_content(url):
-    """Fetch and extract text content from a webpage using requests or Selenium."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, "html.parser")
-        
-        for script in soup(["script", "style"]):
-            script.decompose()
-        text = soup.get_text(separator=" ")
-        
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        cleaned_text = " ".join(chunk for chunk in chunks if chunk)
-        
-        st.write(f"Requests fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
-        if cleaned_text:  # Accept any non-empty content
-            return Document(page_content=cleaned_text, metadata={"source": url})
-        else:
-            st.warning(f"Requests returned empty content for {url}, trying Selenium.")
-    except Exception as e:
-        st.warning(f"Requests failed for {url}: {str(e)}. Falling back to Selenium.")
-
+    """Fetch and extract text content from a webpage using Selenium for dynamic content."""
     try:
         driver = setup_selenium()
         driver.get(url)
-        time.sleep(5)
+        time.sleep(5)  # Wait for dynamic content to load
         soup = BeautifulSoup(driver.page_source, "html.parser")
         driver.quit()
         
-        for script in soup(["script", "style"]):
+        # Remove unwanted tags
+        for script in soup(["script", "style", "header", "footer", "nav"]):
             script.decompose()
-        text = soup.get_text(separator=" ")
         
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        cleaned_text = " ".join(chunk for chunk in chunks if chunk)
+        # Extract text from meaningful tags (e.g., paragraphs, headings)
+        text_elements = soup.find_all(["p", "h1", "h2", "h3", "li", "span"])
+        text = " ".join([element.get_text(strip=True) for element in text_elements if element.get_text(strip=True)])
         
-        st.write(f"Selenium fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
-        if cleaned_text:  # Accept any non-empty content
+        cleaned_text = " ".join(text.split())  # Remove extra whitespace
+        
+        if cleaned_text:
+            st.write(f"Fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
             return Document(page_content=cleaned_text, metadata={"source": url})
         else:
-            st.error(f"Selenium fetched empty content from {url}")
+            st.error(f"No meaningful content fetched from {url}")
             return None
     except Exception as e:
-        st.error(f"Selenium failed for {url}: {str(e)}")
+        st.error(f"Failed to fetch content from {url}: {str(e)}")
         return None
 
 def load_web_content():
@@ -115,14 +95,12 @@ def load_web_content():
 def split_text(documents):
     """Split documents into chunks."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
+        chunk_size=500,  # Smaller chunks for better granularity
+        chunk_overlap=100,
         add_start_index=True
     )
     chunked_docs = text_splitter.split_documents(documents)
     st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
-    for i, chunk in enumerate(chunked_docs):
-        st.write(f"Chunk {i+1}: {chunk.page_content[:100]}...")
     return chunked_docs
 
 def index_docs(documents):
@@ -130,9 +108,12 @@ def index_docs(documents):
     if documents:
         vector_store.add_documents(documents)
         st.write(f"Indexed {len(documents)} documents into vector store")
-        # Test retrieval with a simple query
-        test_result = vector_store.similarity_search("test", k=1)
-        st.write(f"Test retrieval after indexing: {len(test_result)} documents")
+        # Test retrieval
+        test_result = vector_store.similarity_search("insurance rules", k=1)
+        if test_result:
+            st.write(f"Test retrieval successful: {test_result[0].page_content[:100]}...")
+        else:
+            st.warning("Test retrieval failed - no documents matched.")
     else:
         st.error("No documents to index")
 
@@ -140,19 +121,15 @@ def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
     retrieved = vector_store.similarity_search(query, k=5)
     st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
-    for i, doc in enumerate(retrieved):
-        st.write(f"Doc {i+1}: {doc.page_content[:100]}... (from {doc.metadata['source']})")
     return retrieved
 
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
     context = "\n\n".join([doc.page_content for doc in documents])
-    st.write(f"Context length: {len(context)} chars")
     if not context:
-        st.write("Warning: Context is empty!")
+        return "I don’t have enough information to answer this question."
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
-    
     response = chain.invoke({"question": question, "context": context})
     return response.content
 
@@ -161,12 +138,12 @@ if "conversation_history" not in st.session_state:
 
 if "web_content_indexed" not in st.session_state:
     st.write("Loading content from websites, please wait...")
-    all_documents = load_web_content()
+    all_documents = load_web_content()  # Uses updated fetch_web_content
     if all_documents:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, chunks.")
+        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages.")
     else:
         st.error("Failed to load web content.")
 
