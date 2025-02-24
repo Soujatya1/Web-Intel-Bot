@@ -166,7 +166,7 @@ if "web_content_indexed" not in st.session_state:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, {len(chunked_docs)} chunks.")
+        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, chunks.")
     else:
         st.error("Failed to load web content.")
 
