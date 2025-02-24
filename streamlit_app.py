@@ -28,6 +28,7 @@ WEBSITES = [
     "https://irdai.gov.in/rules"
 ]
 
+# Initialize embeddings and vector store
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = InMemoryVectorStore(embeddings)
 
@@ -65,15 +66,17 @@ def fetch_web_content(url):
         cleaned_text = " ".join(chunk for chunk in chunks if chunk)
         
         st.write(f"Requests fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
-        if len(cleaned_text) > 200:
+        if cleaned_text:  # Accept any non-empty content
             return Document(page_content=cleaned_text, metadata={"source": url})
+        else:
+            st.warning(f"Requests returned empty content for {url}, trying Selenium.")
     except Exception as e:
         st.warning(f"Requests failed for {url}: {str(e)}. Falling back to Selenium.")
 
     try:
         driver = setup_selenium()
         driver.get(url)
-        time.sleep(5)  # Increased to 5s for more reliable JS loading
+        time.sleep(5)
         soup = BeautifulSoup(driver.page_source, "html.parser")
         driver.quit()
         
@@ -86,7 +89,11 @@ def fetch_web_content(url):
         cleaned_text = " ".join(chunk for chunk in chunks if chunk)
         
         st.write(f"Selenium fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
-        return Document(page_content=cleaned_text, metadata={"source": url})
+        if cleaned_text:  # Accept any non-empty content
+            return Document(page_content=cleaned_text, metadata={"source": url})
+        else:
+            st.error(f"Selenium fetched empty content from {url}")
+            return None
     except Exception as e:
         st.error(f"Selenium failed for {url}: {str(e)}")
         return None
@@ -114,21 +121,35 @@ def split_text(documents):
     )
     chunked_docs = text_splitter.split_documents(documents)
     st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
+    for i, chunk in enumerate(chunked_docs):
+        st.write(f"Chunk {i+1}: {chunk.page_content[:100]}...")
     return chunked_docs
 
 def index_docs(documents):
     """Index documents into the vector store."""
-    vector_store.add_documents(documents)
+    if documents:
+        vector_store.add_documents(documents)
+        st.write(f"Indexed {len(documents)} documents into vector store")
+        # Test retrieval with a simple query
+        test_result = vector_store.similarity_search("test", k=1)
+        st.write(f"Test retrieval after indexing: {len(test_result)} documents")
+    else:
+        st.error("No documents to index")
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
-    retrieved = vector_store.similarity_search(query)
+    retrieved = vector_store.similarity_search(query, k=5)
     st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
+    for i, doc in enumerate(retrieved):
+        st.write(f"Doc {i+1}: {doc.page_content[:100]}... (from {doc.metadata['source']})")
     return retrieved
 
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
     context = "\n\n".join([doc.page_content for doc in documents])
+    st.write(f"Context length: {len(context)} chars")
+    if not context:
+        st.write("Warning: Context is empty!")
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
     
@@ -145,7 +166,7 @@ if "web_content_indexed" not in st.session_state:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, {len(chunked_documents)} chunks.")
+        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, {len(chunked_docs)} chunks.")
     else:
         st.error("Failed to load web content.")
 
