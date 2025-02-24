@@ -109,7 +109,7 @@ def split_text(documents):
         chunk_overlap=200,
         add_start_index=True
     )
-    return text_splitter.split_documents(documents)
+    return text_splitter.split_documents(all_documents)
 
 def index_docs(documents):
     """Index documents into the vector store."""
