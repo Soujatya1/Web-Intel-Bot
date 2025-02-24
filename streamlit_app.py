@@ -24,16 +24,13 @@ Context: {context}
 Answer:
 """
 
-# List of specific websites to load (no crawling beyond these)
 WEBSITES = [
     "https://irdai.gov.in/rules"
 ]
 
-# Initialize embeddings and vector store
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = InMemoryVectorStore(embeddings)
 
-# Initialize the Groq model
 model = ChatGroq(
     groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
@@ -67,6 +64,7 @@ def fetch_web_content(url):
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         cleaned_text = " ".join(chunk for chunk in chunks if chunk)
         
+        st.write(f"Requests fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
         if len(cleaned_text) > 200:
             return Document(page_content=cleaned_text, metadata={"source": url})
     except Exception as e:
@@ -75,7 +73,7 @@ def fetch_web_content(url):
     try:
         driver = setup_selenium()
         driver.get(url)
-        time.sleep(3)
+        time.sleep(5)  # Increased to 5s for more reliable JS loading
         soup = BeautifulSoup(driver.page_source, "html.parser")
         driver.quit()
         
@@ -87,6 +85,7 @@ def fetch_web_content(url):
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         cleaned_text = " ".join(chunk for chunk in chunks if chunk)
         
+        st.write(f"Selenium fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
         return Document(page_content=cleaned_text, metadata={"source": url})
     except Exception as e:
         st.error(f"Selenium failed for {url}: {str(e)}")
@@ -100,6 +99,10 @@ def load_web_content():
         doc = fetch_web_content(url)
         if doc:
             all_documents.append(doc)
+            st.write(f"Loaded {len(doc.page_content)} chars from {url}")
+        else:
+            st.write(f"No content loaded from {url}")
+    st.write(f"Total documents loaded: {len(all_documents)}")
     return all_documents
 
 def split_text(documents):
@@ -109,7 +112,9 @@ def split_text(documents):
         chunk_overlap=200,
         add_start_index=True
     )
-    return text_splitter.split_documents(documents)
+    chunked_docs = text_splitter.split_documents(documents)
+    st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
+    return chunked_docs
 
 def index_docs(documents):
     """Index documents into the vector store."""
@@ -117,7 +122,9 @@ def index_docs(documents):
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
-    return vector_store.similarity_search(query)
+    retrieved = vector_store.similarity_search(query)
+    st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
+    return retrieved
 
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
@@ -128,11 +135,9 @@ def answer_question(question, documents):
     response = chain.invoke({"question": question, "context": context})
     return response.content
 
-# Initialize session state for conversation history
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-# Load and index web content only once on startup
 if "web_content_indexed" not in st.session_state:
     st.write("Loading content from websites, please wait...")
     all_documents = load_web_content()
@@ -140,11 +145,10 @@ if "web_content_indexed" not in st.session_state:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages.")
+        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages, {len(chunked_documents)} chunks.")
     else:
         st.error("Failed to load web content.")
 
-# Chat interface
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
 if question and "web_content_indexed" in st.session_state:
@@ -156,7 +160,6 @@ if question and "web_content_indexed" in st.session_state:
     
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
 
-# Display conversation history
 for message in st.session_state.conversation_history:
     if message["role"] == "user":
         st.chat_message("user").write(message["content"])
