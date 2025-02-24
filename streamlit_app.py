@@ -109,11 +109,11 @@ def split_text(documents):
         chunk_overlap=200,
         add_start_index=True
     )
-    return text_splitter.split_documents(all_documents)
+    return text_splitter.split_documents(documents)
 
 def index_docs(documents):
     """Index documents into the vector store."""
-    vector_store.add_documents(all_documents)
+    vector_store.add_documents(documents)
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
