@@ -28,7 +28,6 @@ WEBSITES = [
     "https://irdai.gov.in/rules"
 ]
 
-# Initialize embeddings and vector store
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 vector_store = InMemoryVectorStore(embeddings)
 
@@ -54,19 +53,17 @@ def fetch_web_content(url):
     try:
         driver = setup_selenium()
         driver.get(url)
-        time.sleep(5)  # Wait for dynamic content to load
+        time.sleep(5) 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         driver.quit()
         
-        # Remove unwanted tags
         for script in soup(["script", "style", "header", "footer", "nav"]):
             script.decompose()
         
-        # Extract text from meaningful tags (e.g., paragraphs, headings)
         text_elements = soup.find_all(["p", "h1", "h2", "h3", "li", "span"])
         text = " ".join([element.get_text(strip=True) for element in text_elements if element.get_text(strip=True)])
         
-        cleaned_text = " ".join(text.split())  # Remove extra whitespace
+        cleaned_text = " ".join(text.split())
         
         if cleaned_text:
             st.write(f"Fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
@@ -79,7 +76,6 @@ def fetch_web_content(url):
         return None
 
 def load_web_content():
-    """Load content only from the specified websites, no crawling."""
     all_documents = []
     for url in WEBSITES:
         st.write(f"Loading: {url}...")
@@ -95,7 +91,7 @@ def load_web_content():
 def split_text(documents):
     """Split documents into chunks."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,  # Smaller chunks for better granularity
+        chunk_size=500,
         chunk_overlap=100,
         add_start_index=True
     )
@@ -138,7 +134,7 @@ if "conversation_history" not in st.session_state:
 
 if "web_content_indexed" not in st.session_state:
     st.write("Loading content from websites, please wait...")
-    all_documents = load_web_content()  # Uses updated fetch_web_content
+    all_documents = load_web_content()
     if all_documents:
         chunked_documents = split_text(all_documents)
         index_docs(chunked_documents)
