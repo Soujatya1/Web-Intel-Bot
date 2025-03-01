@@ -84,33 +84,51 @@ def split_text(documents):
         add_start_index=True
     )
     chunked_docs = text_splitter.split_documents(documents)
-    st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
+
+    st.write(f"📌 Split {len(documents)} documents into {len(chunked_docs)} chunks")
+    
+    # Show first 2 chunks for debugging
+    if chunked_docs:
+        st.write("🔍 Example chunk preview:")
+        st.write(chunked_docs[0].page_content[:300])  # Show first 300 chars
+    
     return chunked_docs
 
-
 def index_docs(documents):
-    """Index documents into the vector store."""
+    """Index documents into the vector store with better debugging."""
     if documents:
         vector_store.add_documents(documents)
-        st.write(f"Indexed {len(documents)} documents into vector store")
-        # Test retrieval
-        test_result = vector_store.similarity_search("insurance rules", k=1)
-        if test_result:
-            st.write(f"Test retrieval successful: {test_result[0].page_content[:100]}...")
+        st.write(f"✅ Indexed {len(documents)} documents into vector store")
+
+        # Verify if documents were stored correctly
+        st.write("🔍 Checking stored documents...")
+        stored_docs = vector_store.similarity_search("insurance", k=3)
+
+        if stored_docs:
+            st.write("✅ Test retrieval successful! Example retrieved chunk:")
+            st.write(stored_docs[0].page_content[:300])  # Show first 300 chars
         else:
-            st.warning("Test retrieval failed - no documents matched.")
+            st.error("❌ Test retrieval failed - documents may not be stored correctly.")
     else:
-        st.error("No documents to index")
+        st.error("❌ No documents to index")
+
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query and log results for debugging."""
     retrieved = vector_store.similarity_search(query, k=5)
-    
+
     if not retrieved:
-        st.warning("No relevant documents found. Retrieval might not be working correctly.")
+        st.error("❌ No relevant documents found. Possible causes:")
+        st.write("1️⃣ Documents were not indexed properly.")
+        st.write("2️⃣ Embeddings are not working as expected.")
+        st.write("3️⃣ Query does not match indexed content.")
+        return []
     
-    for idx, doc in enumerate(retrieved):
-        st.write(f"Retrieved chunk {idx + 1}: {doc.page_content[:200]}...")
+    st.write(f"✅ Retrieved {len(retrieved)} documents for query: {query}")
+
+    # Print first retrieved chunk
+    st.write("🔍 Example retrieved chunk:")
+    st.write(retrieved[0].page_content[:300])
 
     return retrieved
 
