@@ -29,7 +29,7 @@ WEBSITES = [
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vector_store = InMemoryVectorStore(embeddings)
+vector_store = FAISS.from_documents([], embeddings)
 
 model = ChatGroq(
     groq_api_key="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",
@@ -55,10 +55,21 @@ def fetch_web_content(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-            return Document(page_content=text, metadata={"source": url})
-        else:
-            st.error(f"Failed to fetch content, status code: {response.status_code}")
-            return None
+
+            if text.strip():  # If text is not empty, return it
+                return Document(page_content=text, metadata={"source": url})
+        
+        # If requests fails, fall back to Selenium
+        st.write(f"Using Selenium for {url} as requests did not fetch content...")
+        driver = setup_selenium()
+        driver.get(url)
+        time.sleep(5)  # Wait for JavaScript to load
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        driver.quit()
+
+        text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+        return Document(page_content=text, metadata={"source": url}) if text.strip() else None
+    
     except Exception as e:
         st.error(f"Error fetching content: {e}")
         return None
@@ -89,20 +100,19 @@ def split_text(documents):
 
 def index_docs(documents):
     """Index documents into the vector store."""
+    global vector_store  # Ensure FAISS is updated globally
     if documents:
-        vector_store.add_documents(documents)
+        vector_store = FAISS.from_documents(documents, embeddings)  # Index in FAISS
         st.write(f"Indexed {len(documents)} documents into vector store")
-        # Test retrieval
-        test_result = vector_store.similarity_search("insurance rules", k=1)
-        if test_result:
-            st.write(f"Test retrieval successful: {test_result[0].page_content[:100]}...")
-        else:
-            st.warning("Test retrieval failed - no documents matched.")
     else:
         st.error("No documents to index")
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
+    if vector_store is None or len(vector_store.index.ntotal) == 0:
+        st.warning("No documents indexed, retrieval will return no results.")
+        return []
+    
     retrieved = vector_store.similarity_search(query, k=5)
     st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
     return retrieved
@@ -112,10 +122,12 @@ def answer_question(question, documents):
     context = "\n\n".join([doc.page_content for doc in documents])
     if not context:
         return "I don’t have enough information to answer this question."
+
     prompt = ChatPromptTemplate.from_template(template)
-    chain = prompt | model
-    response = chain.invoke({"question": question, "context": context})
-    return response.content
+    messages = prompt.format_messages(question=question, context=context)
+    
+    response = model(messages)  # Use model directly
+    return response.content if hasattr(response, 'content') else str(response)
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
