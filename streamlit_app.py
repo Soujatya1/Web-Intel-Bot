@@ -49,30 +49,18 @@ def setup_selenium():
     return driver
 
 def fetch_web_content(url):
-    """Fetch and extract text content from a webpage using Selenium for dynamic content."""
     try:
-        driver = setup_selenium()
-        driver.get(url)
-        time.sleep(5) 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        driver.quit()
-        
-        for script in soup(["script", "style", "header", "footer", "nav"]):
-            script.decompose()
-        
-        text_elements = soup.find_all(["p", "h1", "h2", "h3", "li", "span"])
-        text = " ".join([element.get_text(strip=True) for element in text_elements if element.get_text(strip=True)])
-        
-        cleaned_text = " ".join(text.split())
-        
-        if cleaned_text:
-            st.write(f"Fetched {len(cleaned_text)} chars from {url}: {cleaned_text[:100]}...")
-            return Document(page_content=cleaned_text, metadata={"source": url})
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+            return Document(page_content=text, metadata={"source": url})
         else:
-            st.error(f"No meaningful content fetched from {url}")
+            st.error(f"Failed to fetch content, status code: {response.status_code}")
             return None
     except Exception as e:
-        st.error(f"Failed to fetch content from {url}: {str(e)}")
+        st.error(f"Error fetching content: {e}")
         return None
 
 def load_web_content():
