@@ -89,12 +89,20 @@ def load_web_content():
 
 def split_text(documents):
     """Split documents into chunks."""
+    if not documents:
+        st.error("No documents to split")
+        return []
+    
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=100,
         add_start_index=True
     )
     chunked_docs = text_splitter.split_documents(documents)
+    
+    if not chunked_docs:
+        st.error("Text splitting failed, no chunks created")
+    
     st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
     return chunked_docs
 
@@ -109,12 +117,16 @@ def index_docs(documents):
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
-    if vector_store is None or len(vector_store.index.ntotal) == 0:
+    if vector_store is None or vector_store.index is None or vector_store.index.ntotal == 0:
         st.warning("No documents indexed, retrieval will return no results.")
         return []
     
     retrieved = vector_store.similarity_search(query, k=5)
     st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
+
+    if not retrieved:
+        st.warning("No relevant documents found for the query.")
+
     return retrieved
 
 def answer_question(question, documents):
