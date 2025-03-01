@@ -77,15 +77,16 @@ def load_web_content():
     return all_documents
 
 def split_text(documents):
-    """Split documents into chunks."""
+    """Split documents into overlapping chunks for better context retention."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=100,
+        chunk_size=700,   # Increased chunk size
+        chunk_overlap=200, # More overlap to retain context
         add_start_index=True
     )
     chunked_docs = text_splitter.split_documents(documents)
     st.write(f"Split {len(documents)} documents into {len(chunked_docs)} chunks")
     return chunked_docs
+
 
 def index_docs(documents):
     """Index documents into the vector store."""
@@ -102,20 +103,34 @@ def index_docs(documents):
         st.error("No documents to index")
 
 def retrieve_docs(query):
-    """Retrieve relevant documents based on the query."""
+    """Retrieve relevant documents based on the query and log results for debugging."""
     retrieved = vector_store.similarity_search(query, k=5)
-    st.write(f"Retrieved {len(retrieved)} documents for query: {query}")
+    
+    if not retrieved:
+        st.warning("No relevant documents found. Retrieval might not be working correctly.")
+    
+    for idx, doc in enumerate(retrieved):
+        st.write(f"Retrieved chunk {idx + 1}: {doc.page_content[:200]}...")
+
     return retrieved
 
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents."""
+    """Generate an answer based on retrieved documents with better handling for missing context."""
+    
+    if not documents:
+        return "I couldn’t find relevant information to answer this question."
+
     context = "\n\n".join([doc.page_content for doc in documents])
-    if not context:
-        return "I don’t have enough information to answer this question."
+
+    # Debug: Print the context being sent
+    st.write(f"Using context for answering:\n{context[:500]}...")  # Show first 500 chars
+
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
+
     response = chain.invoke({"question": question, "context": context})
-    return response.content
+
+    return response.content if response.content else "I couldn’t generate a proper response."
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
