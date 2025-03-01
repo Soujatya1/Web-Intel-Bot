@@ -108,12 +108,16 @@ def split_text(documents):
 
 def index_docs(documents):
     """Index documents into the vector store."""
-    global vector_store  # Ensure FAISS is updated globally
-    if documents:
-        vector_store = FAISS.from_documents(documents, embeddings)  # Index in FAISS
-        st.write(f"Indexed {len(documents)} documents into vector store")
-    else:
-        st.error("No documents to index")
+    global vector_store
+    if not documents:
+        st.error("No documents found. Cannot index an empty dataset.")
+        return
+    
+    try:
+        vector_store = FAISS.from_documents(documents, embeddings)
+        st.write(f"Indexed {len(documents)} documents into FAISS vector store")
+    except Exception as e:
+        st.error(f"FAISS indexing failed: {e}")
 
 def retrieve_docs(query):
     """Retrieve relevant documents based on the query."""
