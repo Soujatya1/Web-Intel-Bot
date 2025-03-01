@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.documents.base import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.vectorstores import FAISS
+from langchain.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
