@@ -51,26 +51,6 @@ def fetch_web_content(url):
         return None
     return None
 
-def fetch_pdf_links(url):
-    """Extract PDF titles and links for better matching."""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    pdf_data = []
-
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                link = a["href"]
-                if ".pdf" in link.lower():
-                    pdf_title = a.text.strip() if a.text else "Unknown Document"
-                    full_link = link if link.startswith("http") else url + link
-                    pdf_data.append({"title": pdf_title, "link": full_link})
-    except Exception:
-        return []
-
-    return pdf_data
-
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
 
@@ -153,18 +133,15 @@ question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UID
 if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
 
+    # Retrieve relevant documents from the vector store
     related_documents = retrieve_docs(question)
-    answer = answer_question(question, related_documents)
 
-    # Show only the most relevant PDF link if applicable
-    pdf_link = find_most_relevant_pdf(question)
-    if pdf_link:
-        answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
+    # Let the LLM extract relevant links from the context
+    answer = answer_question(question, related_documents)
 
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
 
+# Display conversation history
 for message in st.session_state.conversation_history:
-    if message["role"] == "user":
-        st.chat_message("user").write(message["content"])
-    elif message["role"] == "assistant":
-        st.chat_message("assistant").write(message["content"])
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
