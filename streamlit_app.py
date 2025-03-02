@@ -25,6 +25,24 @@ WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
+# Initialize session states
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
+
+if "pdf_store" not in st.session_state:
+    st.session_state.pdf_store = []
+
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+if "web_content_indexed" not in st.session_state:
+    all_documents = load_web_content()
+
+    if all_documents:
+        chunked_documents = split_text(all_documents)
+        index_docs(chunked_documents)
+        st.session_state.web_content_indexed = True
+
 # Load embeddings model
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
@@ -151,24 +169,6 @@ def answer_question(question, documents):
     response = chain.invoke({"question": question, "context": context})
 
     return response.content if response.content else "I couldn’t generate a proper response."
-
-# Initialize session states
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-
-if "pdf_store" not in st.session_state:
-    st.session_state.pdf_store = []
-
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-
-if "web_content_indexed" not in st.session_state:
-    all_documents = load_web_content()
-
-    if all_documents:
-        chunked_documents = split_text(all_documents)
-        index_docs(chunked_documents)
-        st.session_state.web_content_indexed = True
 
 # User query input
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
