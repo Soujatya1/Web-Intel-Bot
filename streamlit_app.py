@@ -16,6 +16,7 @@ st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
 template = """
 You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
 Also answer situation-based questions derived from the context as per the question.
+Please do not answer anything which is out of the document/website context.
 Question: {question} 
 Context: {context} 
 Answer:
