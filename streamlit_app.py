@@ -34,27 +34,22 @@ model = ChatGroq(
     temperature=0
 )
 
-def fetch_web_content(url, retries=3):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    }
-    
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, "html.parser")
-                text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-                return Document(page_content=text, metadata={"source": url})
-            else:
-                st.error(f"Failed to fetch content, status code: {response.status_code}")
-                return None
-        except requests.exceptions.Timeout:
-            st.warning(f"Timeout error. Retrying {attempt + 1}/{retries}...")
-            time.sleep(5)  # Wait before retrying
-        except Exception as e:
-            st.error(f"Error fetching content: {e}")
-            return None
+def fetch_web_content(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+
+            # Include all hyperlinks found on the page
+            links = [a["href"] for a in soup.find_all("a", href=True) if "http" in a["href"]]
+            text += "\n\n🔗 Related Links:\n" + "\n".join(links)
+
+            return Document(page_content=text, metadata={"source": url})
+    except Exception:
+        return None
+    return None
 
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
@@ -62,6 +57,22 @@ if "pdf_store" not in st.session_state:
 if "pdf_index" not in st.session_state:
     st.session_state.pdf_index = None
     st.session_state.pdf_mapping = {}
+
+def load_web_content():
+    all_documents = []
+    st.session_state.pdf_links_dict = {}
+
+    for url in WEBSITES:
+        doc = fetch_web_content(url)
+        pdf_links = fetch_pdf_links(url)
+
+        if pdf_links:
+            st.session_state.pdf_links_dict[url] = pdf_links
+
+        if doc:
+            all_documents.append(doc)
+
+    return all_documents
 
 def split_text(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=200, add_start_index=True)
@@ -77,38 +88,24 @@ def index_docs(documents):
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
         return []
-
-    # Retrieve more documents (k=8 instead of k=5)
-    retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
-
-    # Filter: Only keep documents where the query words are present
-    query_lower = query.lower()
-    keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
-
-    # If filtering removes all, use the first 5 documents as fallback
-    return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
+    return st.session_state.vector_store.similarity_search(query, k=5)
 
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents."""
+    """Generate an answer and ask the LLM to extract relevant links."""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
-    # Combine retrieved documents into a single context
-    context = "\n\n".join([doc.page_content[:1000] for doc in documents])  # Limit context size
+    context = "\n\n".join([doc.page_content for doc in documents])
 
-    # New improved prompt
+    # New Prompt: Ask LLM to find the best link from the context
     enhanced_template = """
-    You are an expert AI assistant trained to answer questions based on provided context. 
-
-    - Read the provided context carefully.
-    - Answer **only** based on the given information. 
-    - If the context does not provide an answer, **say "The retrieved documents do not contain the required information."** 
-    - If a document contains relevant links, **include them** in your response.
+    You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
+    If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
 
     Question: {question}
     Context: {context}
     
-    Answer:
+    Answer (include relevant links if applicable):
     """
 
     prompt = ChatPromptTemplate.from_template(enhanced_template)
@@ -119,8 +116,17 @@ def answer_question(question, documents):
 
     return answer
 
+
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
+
+if "web_content_indexed" not in st.session_state:
+    all_documents = load_web_content()
+
+    if all_documents:
+        chunked_documents = split_text(all_documents)
+        index_docs(chunked_documents)
+        st.session_state.web_content_indexed = True
 
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
