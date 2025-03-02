@@ -60,15 +60,9 @@ if "pdf_index" not in st.session_state:
 
 def load_web_content():
     all_documents = []
-    st.session_state.pdf_links_dict = {}
 
     for url in WEBSITES:
         doc = fetch_web_content(url)
-        pdf_links = fetch_pdf_links(url)
-
-        if pdf_links:
-            st.session_state.pdf_links_dict[url] = pdf_links
-
         if doc:
             all_documents.append(doc)
 
