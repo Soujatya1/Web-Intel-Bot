@@ -23,7 +23,7 @@ Answer:
 """
 
 WEBSITES = [
-    "https://uidai.gov.in/"
+    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
