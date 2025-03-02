@@ -22,7 +22,7 @@ Answer:
 """
 
 WEBSITES = [
-    "https://irdai.gov.in/rules"
+    "https://enforcementdirectorate.gov.in/pmla"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
