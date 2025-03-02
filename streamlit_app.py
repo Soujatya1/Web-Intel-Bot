@@ -99,7 +99,7 @@ def index_docs(documents):
         st.write(f"✅ Indexing {len(documents)} documents")
         for doc in documents:
             st.write(f"📄 {doc.metadata['source']} → {doc.page_content[:500]}")  # Show first 500 chars
-        st.session_state.vector_store = FAISS.from_documents(documents, embeddings)=
+        st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
 
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
