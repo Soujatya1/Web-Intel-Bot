@@ -21,7 +21,7 @@ Answer:
 """
 
 WEBSITES = [
-    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
     "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
