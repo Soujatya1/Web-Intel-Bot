@@ -23,7 +23,7 @@ Answer:
 """
 
 WEBSITES = [
-    "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/en/", "https://irdai.gov.in/rules"
+    "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/en/", "https://irdai.gov.in/rules", "https://irdai.gov.in/"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
