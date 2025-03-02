@@ -88,7 +88,7 @@ def index_docs(documents):
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
         return []
-    return st.session_state.vector_store.similarity_search(query, k=5)
+    return st.session_state.vector_store.similarity_search(query, k=2)
 
 def answer_question(question, documents):
     """Generate an answer and ask the LLM to extract relevant links."""
