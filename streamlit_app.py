@@ -35,14 +35,6 @@ if "pdf_store" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-if "web_content_indexed" not in st.session_state:
-    all_documents = load_web_content()
-
-    if all_documents:
-        chunked_documents = split_text(all_documents)
-        index_docs(chunked_documents)
-        st.session_state.web_content_indexed = True
-
 # Load embeddings model
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
@@ -125,6 +117,14 @@ def retrieve_docs(query):
     keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
 
     return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
+
+if "web_content_indexed" not in st.session_state:
+    all_documents = load_web_content()
+
+    if all_documents:
+        chunked_documents = split_text(all_documents)
+        index_docs(chunked_documents)
+        st.session_state.web_content_indexed = True
 
 # Function to index PDFs using FAISS
 def index_pdf_links():
