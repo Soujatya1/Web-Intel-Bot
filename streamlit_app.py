@@ -92,32 +92,22 @@ def split_text(documents):
     
     return chunked_docs
 
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None  # Ensure FAISS is stored persistently
+
 def index_docs(documents):
-    """Index documents into FAISS vector store with better debugging."""
-    global vector_store
     if documents:
-        vector_store = FAISS.from_documents(documents, embeddings)  # ✅ Store in FAISS
+        st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
         st.write(f"✅ Indexed {len(documents)} documents into FAISS")
-
-        # Verify if documents were stored correctly
-        st.write("🔍 Checking stored documents...")
-        stored_docs = vector_store.similarity_search("insurance", k=3)
-
-        if stored_docs:
-            st.write("✅ Test retrieval successful! Example retrieved chunk:")
-            st.write(stored_docs[0].page_content[:300])  # Show first 300 chars
-        else:
-            st.error("❌ Test retrieval failed - documents may not be stored correctly.")
     else:
         st.error("❌ No documents to index")
 
 def retrieve_docs(query):
-    """Retrieve relevant documents based on the query and log results for debugging."""
-    if vector_store is None:
+    if st.session_state.vector_store is None:
         st.error("❌ Vector store is empty. Make sure documents are indexed.")
         return []
-
-    retrieved = vector_store.similarity_search(query, k=5)
+    
+    return st.session_state.vector_store.similarity_search(query, k=5)
 
     if not retrieved:
         st.error("❌ No relevant documents found. Possible causes:")
