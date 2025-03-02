@@ -139,6 +139,12 @@ def answer_question(question, documents):
 
     return response.content if response.content else "I couldn’t generate a proper response."
 
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
+
+if "pdf_store" not in st.session_state:
+    st.session_state.pdf_store = []
+
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
