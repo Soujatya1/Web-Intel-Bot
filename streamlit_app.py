@@ -72,16 +72,21 @@ def index_pdf_links():
         return
 
     pdf_titles = [pdf["title"] for pdf in st.session_state.pdf_store]
+    if not pdf_titles:
+        return  # Avoid empty indexing
+    
     pdf_vectors = embeddings.embed_documents(pdf_titles)
 
-    # Create FAISS index
     d = len(pdf_vectors[0])  # Dimensionality of embeddings
     pdf_index = faiss.IndexFlatL2(d)
     pdf_index.add(np.array(pdf_vectors, dtype=np.float32))
 
-    # Store FAISS index and mapping
     st.session_state.pdf_index = pdf_index
     st.session_state.pdf_mapping = {i: pdf["link"] for i, pdf in enumerate(st.session_state.pdf_store)}
+
+    # ✅ Debugging logs
+    st.write("📂 Indexed PDFs:", pdf_titles)
+    st.write(f"✅ FAISS now stores {len(pdf_titles)} PDFs")
 
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
@@ -153,12 +158,15 @@ def answer_question(question, documents):
     
     answer = response.content if response.content else "I couldn’t generate a proper response."
 
-    # Now find the most relevant PDF **after** the answer is generated
+    # ✅ Always try to find a relevant PDF
     pdf_link = find_most_relevant_pdf(answer)
     if pdf_link:
         answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
+    else:
+        st.write("⚠️ No relevant PDF found for this answer.")
 
     return answer
+
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
