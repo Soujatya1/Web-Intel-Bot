@@ -29,7 +29,7 @@ WEBSITES = [
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 model = ChatGroq(
-    groq_api_key="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",
+    groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
     temperature=0
 )
@@ -51,7 +51,6 @@ def fetch_web_content(url):
         return None
     return None
 
-
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
 
@@ -61,14 +60,19 @@ if "pdf_index" not in st.session_state:
 
 def load_web_content():
     all_documents = []
-    
+    st.session_state.pdf_links_dict = {}
+
     for url in WEBSITES:
         doc = fetch_web_content(url)
+        pdf_links = fetch_pdf_links(url)
+
+        if pdf_links:
+            st.session_state.pdf_links_dict[url] = pdf_links
+
         if doc:
             all_documents.append(doc)
 
     return all_documents
-
 
 def split_text(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=200, add_start_index=True)
