@@ -122,14 +122,6 @@ def answer_question(question, documents):
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
-if "web_content_indexed" not in st.session_state:
-    all_documents = load_web_content()
-
-    if all_documents:
-        chunked_documents = split_text(all_documents)
-        index_docs(chunked_documents)
-        st.session_state.web_content_indexed = True
-
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
 if question and "web_content_indexed" in st.session_state:
