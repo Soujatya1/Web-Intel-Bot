@@ -30,7 +30,7 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 
 model = ChatGroq(
     groq_api_key="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",
-    model_name="gemma2-9b-it",
+    model_name="llama3-70b-8192",
     temperature=0
 )
 
