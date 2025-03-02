@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.documents.base import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS  # ✅ Use FAISS instead of InMemoryVectorStore
+from langchain.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -23,12 +23,12 @@ Answer:
 """
 
 WEBSITES = [
-    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html", 
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# ✅ Create FAISS Index
 vector_store = None  # Initialize vector store as None
 
 model = ChatGroq(
@@ -38,9 +38,7 @@ model = ChatGroq(
 )
 
 def fetch_web_content(url, retries=3):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"}
     
     for attempt in range(retries):
         try:
@@ -54,7 +52,7 @@ def fetch_web_content(url, retries=3):
                 return None
         except requests.exceptions.Timeout:
             st.warning(f"Timeout error. Retrying {attempt + 1}/{retries}...")
-            time.sleep(5)  # Wait before retrying
+            time.sleep(5)
         except Exception as e:
             st.error(f"Error fetching content: {e}")
             return None
@@ -62,83 +60,91 @@ def fetch_web_content(url, retries=3):
     st.error(f"Failed to fetch content after {retries} attempts.")
     return None
 
+def fetch_pdf_links(url, retries=3):
+    """Extract PDF links from a given website."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"}
+    
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
+                pdf_links = [a["href"] for a in soup.find_all("a", href=True) if a["href"].endswith(".pdf")]
+                
+                # Convert relative links to absolute
+                pdf_links = [link if link.startswith("http") else url + link for link in pdf_links]
+                
+                return pdf_links if pdf_links else None
+            else:
+                return None
+        except requests.exceptions.Timeout:
+            time.sleep(5)
+        except Exception:
+            return None
+    
+    return None
+
 def load_web_content():
     all_documents = []
+    st.session_state.pdf_links_dict = {}  # Store PDF links
+
     for url in WEBSITES:
         st.write(f"Loading: {url}...")
         doc = fetch_web_content(url)
+        pdf_links = fetch_pdf_links(url)
+
+        if pdf_links:
+            st.session_state.pdf_links_dict[url] = pdf_links
+        
         if doc:
             all_documents.append(doc)
             st.write(f"Loaded {len(doc.page_content)} chars from {url}")
         else:
             st.write(f"No content loaded from {url}")
-    st.write(f"Total documents loaded: {len(all_documents)}")
+    
     return all_documents
 
 def split_text(documents):
-    """Split documents into overlapping chunks for better context retention."""
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=700,   # Increased chunk size
-        chunk_overlap=200, # More overlap to retain context
-        add_start_index=True
-    )
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=200, add_start_index=True)
     chunked_docs = text_splitter.split_documents(documents)
 
-    st.write(f"📌 Split {len(documents)} documents into {len(chunked_docs)} chunks")
-    
-    # Show first 2 chunks for debugging
-    if chunked_docs:
-        st.write("🔍 Example chunk preview:")
-        st.write(chunked_docs[0].page_content[:300])  # Show first 300 chars
-    
     return chunked_docs
 
 if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None  # Ensure FAISS is stored persistently
+    st.session_state.vector_store = None
 
 def index_docs(documents):
     if documents:
         st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
-        st.write(f"✅ Indexed {len(documents)} documents into FAISS")
-    else:
-        st.error("❌ No documents to index")
 
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
-        st.error("❌ Vector store is empty. Make sure documents are indexed.")
         return []
     
     return st.session_state.vector_store.similarity_search(query, k=5)
 
-    if not retrieved:
-        st.error("❌ No relevant documents found. Possible causes:")
-        st.write("1️⃣ Documents were not indexed properly.")
-        st.write("2️⃣ Embeddings are not working as expected.")
-        st.write("3️⃣ Query does not match indexed content.")
-        return []
-    
-    st.write(f"✅ Retrieved {len(retrieved)} documents for query: {query}")
+def find_pdf_links(query):
+    """Check if the query is asking for a PDF and return relevant links."""
+    query_lower = query.lower()
+    matching_pdfs = []
 
-    # Print first retrieved chunk
-    st.write("🔍 Example retrieved chunk:")
-    st.write(retrieved[0].page_content[:300])
+    for url, pdf_links in st.session_state.pdf_links_dict.items():
+        for pdf_link in pdf_links:
+            if any(keyword in pdf_link.lower() for keyword in query_lower.split()):
+                matching_pdfs.append(pdf_link)
 
-    return retrieved
+    return matching_pdfs
 
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents with better handling for missing context."""
+    """Generate an answer based on retrieved documents."""
     
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
 
-    # Debug: Print the context being sent
-    st.write(f"Using context for answering:\n{context[:500]}...")  # Show first 500 chars
-
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
-
     response = chain.invoke({"question": question, "context": context})
 
     return response.content if response.content else "I couldn’t generate a proper response."
@@ -147,28 +153,25 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
 if "web_content_indexed" not in st.session_state:
-    st.write("🔄 Reloading content from websites, please wait...")
     all_documents = load_web_content()
     
     if all_documents:
         chunked_documents = split_text(all_documents)
-        
-        # 🔄 Reset vector store before re-indexing
         index_docs(chunked_documents)
-
         st.session_state.web_content_indexed = True
-        st.success(f"✅ Web content reloaded and indexed successfully! Loaded {len(all_documents)} pages.")
-    else:
-        st.error("❌ Failed to load web content.")
 
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
 if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
-    
-    related_documents = retrieve_docs(question)
-    
-    answer = answer_question(question, related_documents)
+
+    # Check if the user wants a PDF link
+    pdf_links = find_pdf_links(question)
+    if pdf_links:
+        answer = "Here are some relevant PDFs:\n" + "\n".join([f"🔗 [Download PDF]({link})" for link in pdf_links])
+    else:
+        related_documents = retrieve_docs(question)
+        answer = answer_question(question, related_documents)
     
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
 
