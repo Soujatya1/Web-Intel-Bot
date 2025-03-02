@@ -88,24 +88,38 @@ def index_docs(documents):
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
         return []
-    return st.session_state.vector_store.similarity_search(query, k=5)
+
+    # Retrieve more documents (k=8 instead of k=5)
+    retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
+
+    # Filter: Only keep documents where the query words are present
+    query_lower = query.lower()
+    keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
+
+    # If filtering removes all, use the first 5 documents as fallback
+    return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
 
 def answer_question(question, documents):
-    """Generate an answer and ask the LLM to extract relevant links."""
+    """Generate an answer based on retrieved documents."""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
-    context = "\n\n".join([doc.page_content for doc in documents])
+    # Combine retrieved documents into a single context
+    context = "\n\n".join([doc.page_content[:1000] for doc in documents])  # Limit context size
 
-    # New Prompt: Ask LLM to find the best link from the context
+    # New improved prompt
     enhanced_template = """
-    You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
-    If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
+    You are an expert AI assistant trained to answer questions based on provided context. 
+
+    - Read the provided context carefully.
+    - Answer **only** based on the given information. 
+    - If the context does not provide an answer, **say "The retrieved documents do not contain the required information."** 
+    - If a document contains relevant links, **include them** in your response.
 
     Question: {question}
     Context: {context}
     
-    Answer (include relevant links if applicable):
+    Answer:
     """
 
     prompt = ChatPromptTemplate.from_template(enhanced_template)
@@ -115,7 +129,6 @@ def answer_question(question, documents):
     answer = response.content if response.content else "I couldn’t generate a proper response."
 
     return answer
-
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
