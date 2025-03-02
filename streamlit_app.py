@@ -51,6 +51,7 @@ def fetch_web_content(url):
         return None
     return None
 
+
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
 
