@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
 import faiss
 import time
+import numpy as np
 
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
@@ -46,17 +47,66 @@ def fetch_web_content(url):
     return None
 
 def fetch_pdf_links(url):
-    """Extract PDF links from a given website."""
+    """Extract PDF titles and links for better matching."""
     headers = {"User-Agent": "Mozilla/5.0"}
+    pdf_data = []
+
     try:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
-            pdf_links = [a["href"] for a in soup.find_all("a", href=True) if ".pdf" in a["href"].lower()]
-            return [link if link.startswith("http") else url + link for link in pdf_links] if pdf_links else None
+            for a in soup.find_all("a", href=True):
+                link = a["href"]
+                if ".pdf" in link.lower():
+                    pdf_title = a.text.strip() if a.text else "Unknown Document"
+                    full_link = link if link.startswith("http") else url + link
+                    pdf_data.append({"title": pdf_title, "link": full_link})
     except Exception:
+        return []
+
+    return pdf_data
+
+def index_pdf_links():
+    """Indexes PDF links using FAISS for quick similarity search."""
+    if not st.session_state.pdf_store:
+        return
+
+    pdf_titles = [pdf["title"] for pdf in st.session_state.pdf_store]
+    pdf_vectors = embeddings.embed_documents(pdf_titles)
+
+    # Create FAISS index
+    d = len(pdf_vectors[0])  # Dimensionality of embeddings
+    pdf_index = faiss.IndexFlatL2(d)
+    pdf_index.add(np.array(pdf_vectors, dtype=np.float32))
+
+    # Store FAISS index and mapping
+    st.session_state.pdf_index = pdf_index
+    st.session_state.pdf_mapping = {i: pdf["link"] for i, pdf in enumerate(st.session_state.pdf_store)}
+
+if "pdf_store" not in st.session_state:
+    st.session_state.pdf_store = []
+
+if "pdf_index" not in st.session_state:
+    st.session_state.pdf_index = None
+    st.session_state.pdf_mapping = {}
+
+index_pdf_links()
+
+def find_most_relevant_pdf(answer_context):
+    """Finds the most relevant PDF using FAISS vector search."""
+    if not st.session_state.pdf_store or "pdf_index" not in st.session_state:
         return None
-    return None
+
+    query_vector = np.array([embeddings.embed_query(answer_context)], dtype=np.float32)
+    
+    # Perform similarity search in FAISS
+    D, I = st.session_state.pdf_index.search(query_vector, k=1)  # Retrieve top 1 match
+
+    if D[0][0] < 0.5:  # Ensure similarity threshold
+        return None
+
+    best_match_index = I[0][0]
+    return st.session_state.pdf_mapping.get(best_match_index, None)
 
 def load_web_content():
     all_documents = []
@@ -90,22 +140,6 @@ def retrieve_docs(query):
         return []
     return st.session_state.vector_store.similarity_search(query, k=5)
 
-def find_most_relevant_pdf(query):
-    """Find the most relevant PDF based on the query."""
-    query_lower = query.lower()
-    best_match = None
-    best_score = 0
-
-    for url, pdf_links in st.session_state.pdf_links_dict.items():
-        for pdf_link in pdf_links:
-            match_score = sum(keyword in pdf_link.lower() for keyword in query_lower.split())
-
-            if match_score > best_score:
-                best_score = match_score
-                best_match = pdf_link
-
-    return best_match
-
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
     if not documents:
@@ -116,8 +150,15 @@ def answer_question(question, documents):
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
     response = chain.invoke({"question": question, "context": context})
+    
+    answer = response.content if response.content else "I couldn’t generate a proper response."
 
-    return response.content if response.content else "I couldn’t generate a proper response."
+    # Now find the most relevant PDF **after** the answer is generated
+    pdf_link = find_most_relevant_pdf(answer)
+    if pdf_link:
+        answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
+
+    return answer
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
