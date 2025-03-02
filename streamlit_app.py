@@ -41,6 +41,11 @@ def fetch_web_content(url):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+
+            # Include all hyperlinks found on the page
+            links = [a["href"] for a in soup.find_all("a", href=True) if "http" in a["href"]]
+            text += "\n\n🔗 Related Links:\n" + "\n".join(links)
+
             return Document(page_content=text, metadata={"source": url})
     except Exception:
         return None
@@ -66,52 +71,12 @@ def fetch_pdf_links(url):
 
     return pdf_data
 
-def index_pdf_links():
-    """Indexes PDF links using FAISS for quick similarity search."""
-    if not st.session_state.pdf_store:
-        return
-
-    pdf_titles = [pdf["title"] for pdf in st.session_state.pdf_store]
-    if not pdf_titles:
-        return  # Avoid empty indexing
-    
-    pdf_vectors = embeddings.embed_documents(pdf_titles)
-
-    d = len(pdf_vectors[0])  # Dimensionality of embeddings
-    pdf_index = faiss.IndexFlatL2(d)
-    pdf_index.add(np.array(pdf_vectors, dtype=np.float32))
-
-    st.session_state.pdf_index = pdf_index
-    st.session_state.pdf_mapping = {i: pdf["link"] for i, pdf in enumerate(st.session_state.pdf_store)}
-
-    # ✅ Debugging logs
-    st.write("📂 Indexed PDFs:", pdf_titles)
-    st.write(f"✅ FAISS now stores {len(pdf_titles)} PDFs")
-
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
 
 if "pdf_index" not in st.session_state:
     st.session_state.pdf_index = None
     st.session_state.pdf_mapping = {}
-
-index_pdf_links()
-
-def find_most_relevant_pdf(answer_context):
-    """Finds the most relevant PDF using FAISS vector search."""
-    if not st.session_state.pdf_store or "pdf_index" not in st.session_state:
-        return None
-
-    query_vector = np.array([embeddings.embed_query(answer_context)], dtype=np.float32)
-    
-    # Perform similarity search in FAISS
-    D, I = st.session_state.pdf_index.search(query_vector, k=1)  # Retrieve top 1 match
-
-    if D[0][0] < 0.5:  # Ensure similarity threshold
-        return None
-
-    best_match_index = I[0][0]
-    return st.session_state.pdf_mapping.get(best_match_index, None)
 
 def load_web_content():
     all_documents = []
@@ -146,24 +111,28 @@ def retrieve_docs(query):
     return st.session_state.vector_store.similarity_search(query, k=5)
 
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents."""
+    """Generate an answer and ask the LLM to extract relevant links."""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
 
-    prompt = ChatPromptTemplate.from_template(template)
+    # New Prompt: Ask LLM to find the best link from the context
+    enhanced_template = """
+    You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
+    If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
+
+    Question: {question}
+    Context: {context}
+    
+    Answer (include relevant links if applicable):
+    """
+
+    prompt = ChatPromptTemplate.from_template(enhanced_template)
     chain = prompt | model
     response = chain.invoke({"question": question, "context": context})
     
     answer = response.content if response.content else "I couldn’t generate a proper response."
-
-    # ✅ Always try to find a relevant PDF
-    pdf_link = find_most_relevant_pdf(answer)
-    if pdf_link:
-        answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
-    else:
-        st.write("⚠️ No relevant PDF found for this answer.")
 
     return answer
 
