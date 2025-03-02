@@ -23,7 +23,7 @@ Answer:
 """
 
 WEBSITES = [
-    "https://egazette.gov.in/(S(u233lk1oha3dcneaubhbruyz))/default.aspx#"
+    "https://egazette.gov.in/(S(u233lk1oha3dcneaubhbruyz))/Aboutus.aspx"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
