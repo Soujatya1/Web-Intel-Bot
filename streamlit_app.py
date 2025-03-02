@@ -1,12 +1,12 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from langchain_core.documents.base import Document
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import Chroma
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -17,19 +17,18 @@ st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
 
 template = """
-You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
-Also answer situation-based questions derived from the context as per the question.
+You are an assistant for question-answering tasks. Use the following retrieved context to answer the question. 
+If you don't know the answer, just say that you don't know. Keep responses precise.
 Question: {question} 
 Context: {context} 
 Answer:
 """
 
-WEBSITES = [
-    "https://irdai.gov.in/rules"
-]
+WEBSITES = ["https://irdai.gov.in/rules"]
 
+# Initialize embeddings and ChromaDB
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vector_store = InMemoryVectorStore(embeddings)
+vector_store = Chroma(embedding_function=embeddings)
 
 model = ChatGroq(
     groq_api_key="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",
@@ -37,18 +36,8 @@ model = ChatGroq(
     temperature=0
 )
 
-def setup_selenium():
-    """Set up Selenium with headless Chrome."""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
-
 def fetch_web_content(url):
+    """Fetch content from a webpage and return a LangChain Document."""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
@@ -64,90 +53,67 @@ def fetch_web_content(url):
         return None
 
 def load_web_content():
+    """Fetch and store web content."""
     all_documents = []
     for url in WEBSITES:
         st.write(f"Loading: {url}...")
         doc = fetch_web_content(url)
         if doc:
             all_documents.append(doc)
-            st.write(f"Loaded {len(doc.page_content)} chars from {url}")
+            st.write(f"Loaded {len(doc.page_content)} characters from {url}")
         else:
             st.write(f"No content loaded from {url}")
-    st.write(f"Total documents loaded: {len(all_documents)}")
     return all_documents
 
 def split_text(documents):
-    """Split documents into overlapping chunks for better context retention."""
+    """Split documents into chunks for better retrieval."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=700,   # Increased chunk size
-        chunk_overlap=200, # More overlap to retain context
+        chunk_size=700,
+        chunk_overlap=200,
         add_start_index=True
     )
     chunked_docs = text_splitter.split_documents(documents)
-
     st.write(f"📌 Split {len(documents)} documents into {len(chunked_docs)} chunks")
-    
-    # Show first 2 chunks for debugging
-    if chunked_docs:
-        st.write("🔍 Example chunk preview:")
-        st.write(chunked_docs[0].page_content[:300])  # Show first 300 chars
-    
     return chunked_docs
 
 def index_docs(documents):
-    """Index documents into the vector store with better debugging."""
+    """Index documents into the Chroma vector store."""
     if documents:
         vector_store.add_documents(documents)
         st.write(f"✅ Indexed {len(documents)} documents into vector store")
 
-        # Verify if documents were stored correctly
-        st.write("🔍 Checking stored documents...")
-        stored_docs = vector_store.similarity_search("insurance", k=3)
-
-        if stored_docs:
-            st.write("✅ Test retrieval successful! Example retrieved chunk:")
-            st.write(stored_docs[0].page_content[:300])  # Show first 300 chars
+        # Test retrieval
+        test_retrieval = vector_store.similarity_search("insurance", k=1)
+        if test_retrieval:
+            st.write("✅ Test retrieval successful! Example chunk:")
+            st.write(test_retrieval[0].page_content[:300])
         else:
-            st.error("❌ Test retrieval failed - documents may not be stored correctly.")
-    else:
-        st.error("❌ No documents to index")
-
+            st.error("❌ Test retrieval failed - vector store may not be working correctly.")
 
 def retrieve_docs(query):
-    """Retrieve relevant documents based on the query and log results for debugging."""
-    retrieved = vector_store.similarity_search(query, k=5)
-
+    """Retrieve relevant documents for a given query."""
+    retrieved = vector_store.similarity_search(query, k=3)
     if not retrieved:
         st.error("❌ No relevant documents found. Possible causes:")
         st.write("1️⃣ Documents were not indexed properly.")
         st.write("2️⃣ Embeddings are not working as expected.")
-        st.write("3️⃣ Query does not match indexed content.")
         return []
     
     st.write(f"✅ Retrieved {len(retrieved)} documents for query: {query}")
-
-    # Print first retrieved chunk
-    st.write("🔍 Example retrieved chunk:")
-    st.write(retrieved[0].page_content[:300])
-
     return retrieved
 
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents with better handling for missing context."""
-    
+    """Generate an answer based on retrieved documents."""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
-
-    # Debug: Print the context being sent
-    st.write(f"Using context for answering:\n{context[:500]}...")  # Show first 500 chars
+    st.write(f"Using context for answering:\n{context[:500]}...") 
 
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
 
     response = chain.invoke({"question": question, "context": context})
-
     return response.content if response.content else "I couldn’t generate a proper response."
 
 if "conversation_history" not in st.session_state:
@@ -159,9 +125,9 @@ if "web_content_indexed" not in st.session_state:
     
     if all_documents:
         chunked_documents = split_text(all_documents)
-        
-        # 🔄 Reset vector store before re-indexing
-        vector_store = InMemoryVectorStore(embeddings)
+
+        # Reset ChromaDB and re-index documents
+        vector_store = Chroma(embedding_function=embeddings)
         index_docs(chunked_documents)
 
         st.session_state.web_content_indexed = True
@@ -175,7 +141,6 @@ if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
     
     related_documents = retrieve_docs(question)
-    
     answer = answer_question(question, related_documents)
     
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
