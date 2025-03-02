@@ -13,4 +13,4 @@ asyncio
 bs4
 selenium
 webdriver_manager
-chromadb
+faiss-cpu
