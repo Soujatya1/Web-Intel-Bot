@@ -1,13 +1,14 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import numpy as np
+import faiss
 from langchain_core.documents.base import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
-import faiss
 
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
@@ -24,14 +25,17 @@ WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
+# Load embeddings model
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
+# Initialize ChatGroq model
 model = ChatGroq(
     groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
     temperature=0
 )
 
+# Function to fetch webpage content
 def fetch_web_content(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -44,11 +48,10 @@ def fetch_web_content(url):
         return None
     return None
 
+# Function to extract PDF links
 def fetch_pdf_links(url):
-    """Extract PDF titles and links for better matching."""
     headers = {"User-Agent": "Mozilla/5.0"}
     pdf_data = []
-
     try:
         response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
@@ -61,9 +64,9 @@ def fetch_pdf_links(url):
                     pdf_data.append({"title": pdf_title, "link": full_link})
     except Exception:
         return []
-
     return pdf_data
 
+# Function to load web content
 def load_web_content():
     all_documents = []
     st.session_state.pdf_store = []
@@ -80,65 +83,76 @@ def load_web_content():
 
     return all_documents
 
+# Function to split text into chunks
 def split_text(documents):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=200, add_start_index=True)
     return text_splitter.split_documents(documents)
 
+# Initialize vector store if not present
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 
+# Function to index documents
 def index_docs(documents):
     if documents:
         st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
 
+# Retrieve relevant documents
 def retrieve_docs(query):
-    """Retrieve the most relevant documents using hybrid search (semantic + keyword)."""
     if st.session_state.vector_store is None:
         return []
-
+    
     retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
-
     query_lower = query.lower()
     keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
 
     return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
 
-def find_most_relevant_pdf(query):
-    """Find the most relevant PDF using embedding similarity."""
+# Function to index PDFs using FAISS
+def index_pdf_links():
     if not st.session_state.pdf_store:
-        return None
+        return
 
     pdf_titles = [pdf["title"] for pdf in st.session_state.pdf_store]
     pdf_vectors = embeddings.embed_documents(pdf_titles)
 
-    query_vector = embeddings.embed_query(query)
-    
-    # Compute cosine similarity
-    best_match = None
-    highest_similarity = -1
+    d = len(pdf_vectors[0])  # Dimensionality of embeddings
+    pdf_index = faiss.IndexFlatL2(d)
+    pdf_index.add(np.array(pdf_vectors, dtype=np.float32))
 
-    for idx, vector in enumerate(pdf_vectors):
-        similarity = sum(q * v for q, v in zip(query_vector, vector))  # Cosine similarity approximation
+    st.session_state.pdf_index = pdf_index
+    st.session_state.pdf_mapping = {i: pdf["link"] for i, pdf in enumerate(st.session_state.pdf_store)}
 
-        if similarity > highest_similarity:
-            highest_similarity = similarity
-            best_match = st.session_state.pdf_store[idx]["link"]
+if "pdf_index" not in st.session_state:
+    index_pdf_links()
 
-    return best_match if highest_similarity > 0.5 else None  # Ensure minimum relevance threshold
+# Function to retrieve the most relevant PDF
+def find_most_relevant_pdf(query):
+    if not st.session_state.pdf_store or "pdf_index" not in st.session_state:
+        return None
 
+    query_vector = np.array([embeddings.embed_query(query)], dtype=np.float32)
+    D, I = st.session_state.pdf_index.search(query_vector, k=1)
+
+    if D[0][0] < 0.5:  # Ensure relevance threshold
+        return None
+
+    best_match_index = I[0][0]
+    return st.session_state.pdf_mapping.get(best_match_index, None)
+
+# Function to generate an answer
 def answer_question(question, documents):
-    """Generate an answer based on retrieved documents."""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
-
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
     response = chain.invoke({"question": question, "context": context})
 
     return response.content if response.content else "I couldn’t generate a proper response."
 
+# Initialize session states
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 
@@ -156,6 +170,7 @@ if "web_content_indexed" not in st.session_state:
         index_docs(chunked_documents)
         st.session_state.web_content_indexed = True
 
+# User query input
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
 if question and "web_content_indexed" in st.session_state:
@@ -164,13 +179,14 @@ if question and "web_content_indexed" in st.session_state:
     related_documents = retrieve_docs(question)
     answer = answer_question(question, related_documents)
 
-    # Show the relevant PDF link only if found
+    # Attach relevant PDF link if found
     pdf_link = find_most_relevant_pdf(question)
     if pdf_link:
         answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
 
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
 
+# Display chat messages
 for message in st.session_state.conversation_history:
     if message["role"] == "user":
         st.chat_message("user").write(message["content"])
