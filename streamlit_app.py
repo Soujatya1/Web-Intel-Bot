@@ -10,13 +10,6 @@ from langchain.embeddings import HuggingFaceEmbeddings
 import faiss
 import time
 import numpy as np
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from requests_html import HTMLSession
-
-os.system("pip install lxml[html_clean] lxml_html_clean requests-html")
 
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
@@ -42,25 +35,21 @@ model = ChatGroq(
 )
 
 def fetch_web_content(url):
-    """Fetch content using Requests-HTML without relying on lxml."""
-    session = HTMLSession()
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = session.get(url)
-        response.html.render(timeout=20)  # Render JavaScript
-        
-        # Use html.parser instead of lxml
-        soup = BeautifulSoup(response.html.html, "html.parser")
-        text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
 
-        if not text:
-            st.write(f"⚠️ No content extracted from {url}!")
-        else:
-            st.write(f"✅ Extracted {len(text)} characters from {url}")
+            # Include all hyperlinks found on the page
+            links = [a["href"] for a in soup.find_all("a", href=True) if "http" in a["href"]]
+            text += "\n\n🔗 Related Links:\n" + "\n".join(links)
 
-        return Document(page_content=text, metadata={"source": url})
-    except Exception as e:
-        st.write(f"⚠️ Error fetching {url}: {e}")
+            return Document(page_content=text, metadata={"source": url})
+    except Exception:
         return None
+    return None
 
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
@@ -94,22 +83,21 @@ if "vector_store" not in st.session_state:
 
 def index_docs(documents):
     if documents:
-        st.write(f"✅ Indexing {len(documents)} documents")
-        for doc in documents:
-            st.write(f"📄 {doc.metadata['source']} → {doc.page_content[:500]}")  # Show first 500 chars
         st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
 
 def retrieve_docs(query):
     if st.session_state.vector_store is None:
         return []
 
+    # Retrieve more documents (k=8 instead of k=5)
     retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
 
-    st.write(f"🔍 Retrieved {len(retrieved_docs)} docs for query: {query}")
-    for doc in retrieved_docs:
-        st.write(f"📄 {doc.metadata['source']} → {doc.page_content[:500]}")
+    # Filter: Only keep documents where the query words are present
+    query_lower = query.lower()
+    keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
 
-    return retrieved_docs
+    # If filtering removes all, use the first 5 documents as fallback
+    return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
 
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
