@@ -7,7 +7,8 @@ from langchain.vectorstores import FAISS  # ✅ Use FAISS instead of InMemoryVec
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
-import faiss  # ✅ Ensure FAISS is imported
+import faiss
+import time
 
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
@@ -35,20 +36,30 @@ model = ChatGroq(
     temperature=0
 )
 
-def fetch_web_content(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-            return Document(page_content=text, metadata={"source": url})
-        else:
-            st.error(f"Failed to fetch content, status code: {response.status_code}")
+def fetch_web_content(url, retries=3):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    }
+    
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
+                text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+                return Document(page_content=text, metadata={"source": url})
+            else:
+                st.error(f"Failed to fetch content, status code: {response.status_code}")
+                return None
+        except requests.exceptions.Timeout:
+            st.warning(f"Timeout error. Retrying {attempt + 1}/{retries}...")
+            time.sleep(5)  # Wait before retrying
+        except Exception as e:
+            st.error(f"Error fetching content: {e}")
             return None
-    except Exception as e:
-        st.error(f"Error fetching content: {e}")
-        return None
+    
+    st.error(f"Failed to fetch content after {retries} attempts.")
+    return None
 
 def load_web_content():
     all_documents = []
