@@ -86,9 +86,18 @@ def index_docs(documents):
         st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
 
 def retrieve_docs(query):
+    """Retrieve the most relevant documents using hybrid search (semantic + keyword)."""
     if st.session_state.vector_store is None:
         return []
-    return st.session_state.vector_store.similarity_search(query, k=5)
+
+    # Retrieve top 8 relevant docs using vector similarity
+    retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
+
+    # Boost relevance by prioritizing docs that contain exact keyword matches
+    query_lower = query.lower()
+    keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
+
+    return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]  # Return keyword-filtered docs, otherwise top 5
 
 def find_most_relevant_pdf(query):
     """Find the most relevant PDF based on the query."""
@@ -104,7 +113,7 @@ def find_most_relevant_pdf(query):
                 best_score = match_score
                 best_match = pdf_link
 
-    return best_match
+    return best_match if best_score > 0 else None  # Ensure only highly relevant PDFs are considered
 
 def answer_question(question, documents):
     """Generate an answer based on retrieved documents."""
@@ -138,7 +147,7 @@ if question and "web_content_indexed" in st.session_state:
     related_documents = retrieve_docs(question)
     answer = answer_question(question, related_documents)
 
-    # Show only the most relevant PDF link if applicable
+    # Show the relevant PDF link only if found
     pdf_link = find_most_relevant_pdf(question)
     if pdf_link:
         answer += f"\n\n📄 Here is a relevant PDF:\n🔗 [Download PDF]({pdf_link})"
