@@ -154,15 +154,20 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 
 if "web_content_indexed" not in st.session_state:
-    st.write("Loading content from websites, please wait...")
+    st.write("🔄 Reloading content from websites, please wait...")
     all_documents = load_web_content()
+    
     if all_documents:
         chunked_documents = split_text(all_documents)
+        
+        # 🔄 Reset vector store before re-indexing
+        vector_store = InMemoryVectorStore(embeddings)
         index_docs(chunked_documents)
+
         st.session_state.web_content_indexed = True
-        st.success(f"Web content loaded and indexed successfully! Loaded {len(all_documents)} pages.")
+        st.success(f"✅ Web content reloaded and indexed successfully! Loaded {len(all_documents)} pages.")
     else:
-        st.error("Failed to load web content.")
+        st.error("❌ Failed to load web content.")
 
 question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
 
