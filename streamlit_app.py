@@ -14,6 +14,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from requests_html import HTMLSession
 
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
@@ -39,29 +40,21 @@ model = ChatGroq(
 )
 
 def fetch_web_content(url):
-    """Fetch content using Selenium (for JavaScript-rendered pages)."""
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    
+    """Fetch content using Requests-HTML for JavaScript-rendered pages."""
+    session = HTMLSession()
     try:
-        driver.get(url)
-        time.sleep(5)  # Wait for JavaScript to load
+        response = session.get(url)
+        response.html.render(timeout=20)  # Render JavaScript
+        text = " ".join([p.text.strip() for p in response.html.find("p, h1, h2, h3, li")])
 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-        st.write(f"🔍 Extracted Content from {url}:")
-        st.write(text[:1000])
-        
-        driver.quit()
-        
+        if not text:
+            st.write(f"⚠️ No content extracted from {url}!")
+        else:
+            st.write(f"✅ Extracted {len(text)} characters from {url}")
+
         return Document(page_content=text, metadata={"source": url})
     except Exception as e:
-        st.write(f"⚠️ Error fetching {url} with Selenium: {e}")
-        driver.quit()
+        st.write(f"⚠️ Error fetching {url}: {e}")
         return None
 
 if "pdf_store" not in st.session_state:
