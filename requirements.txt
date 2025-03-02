@@ -15,4 +15,3 @@ selenium
 webdriver_manager
 faiss-cpu
 numpy
-lxml[html_clean] lxml_html_clean requests-html
