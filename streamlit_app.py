@@ -29,7 +29,7 @@ WEBSITES = [
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 model = ChatGroq(
-    groq_api_key="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",
+    groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
     temperature=0
 )
