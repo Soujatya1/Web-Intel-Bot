@@ -106,6 +106,7 @@ if "vector_store" not in st.session_state:
 def index_docs(documents):
     if documents:
         st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
+        st.write(f"✅ Indexed {len(documents)} documents")
 
 # Retrieve relevant documents
 def retrieve_docs(query):
@@ -113,10 +114,17 @@ def retrieve_docs(query):
         return []
     
     retrieved_docs = st.session_state.vector_store.similarity_search(query, k=8)
+
     query_lower = query.lower()
     keyword_filtered_docs = [doc for doc in retrieved_docs if any(word in doc.page_content.lower() for word in query_lower.split())]
 
-    return keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
+    final_docs = keyword_filtered_docs if keyword_filtered_docs else retrieved_docs[:5]
+    
+    st.write(f"🔍 Retrieved {len(final_docs)} relevant docs")  # Debugging log
+    for doc in final_docs:
+        st.write(f"📄 {doc.page_content[:200]}...")  # Show first 200 chars
+
+    return final_docs
 
 if "web_content_indexed" not in st.session_state:
     all_documents = load_web_content()
@@ -164,6 +172,9 @@ def answer_question(question, documents):
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
+
+    st.write(f"📢 Context passed to model:\n{context[:500]}...")  # Debugging log
+
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | model
     response = chain.invoke({"question": question, "context": context})
