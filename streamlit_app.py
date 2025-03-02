@@ -34,22 +34,27 @@ model = ChatGroq(
     temperature=0
 )
 
-def fetch_web_content(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-
-            # Include all hyperlinks found on the page
-            links = [a["href"] for a in soup.find_all("a", href=True) if "http" in a["href"]]
-            text += "\n\n🔗 Related Links:\n" + "\n".join(links)
-
-            return Document(page_content=text, metadata={"source": url})
-    except Exception:
-        return None
-    return None
+def fetch_web_content(url, retries=3):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    }
+    
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "html.parser")
+                text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
+                return Document(page_content=text, metadata={"source": url})
+            else:
+                st.error(f"Failed to fetch content, status code: {response.status_code}")
+                return None
+        except requests.exceptions.Timeout:
+            st.warning(f"Timeout error. Retrying {attempt + 1}/{retries}...")
+            time.sleep(5)  # Wait before retrying
+        except Exception as e:
+            st.error(f"Error fetching content: {e}")
+            return None
 
 if "pdf_store" not in st.session_state:
     st.session_state.pdf_store = []
