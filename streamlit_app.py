@@ -16,6 +16,8 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from requests_html import HTMLSession
 
+os.system("pip install lxml[html_clean] lxml_html_clean requests-html")
+
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
 
@@ -40,12 +42,15 @@ model = ChatGroq(
 )
 
 def fetch_web_content(url):
-    """Fetch content using Requests-HTML for JavaScript-rendered pages."""
+    """Fetch content using Requests-HTML without relying on lxml."""
     session = HTMLSession()
     try:
         response = session.get(url)
         response.html.render(timeout=20)  # Render JavaScript
-        text = " ".join([p.text.strip() for p in response.html.find("p, h1, h2, h3, li")])
+        
+        # Use html.parser instead of lxml
+        soup = BeautifulSoup(response.html.html, "html.parser")
+        text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
 
         if not text:
             st.write(f"⚠️ No content extracted from {url}!")
