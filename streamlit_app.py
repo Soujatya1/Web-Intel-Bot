@@ -64,6 +64,7 @@ def answer_question(question, documents):
     enhanced_template = """
     You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
     If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
+    Capture the dates of the circulars, rules, regulations, etc. properly, so that the answers are correct according to the questions asked.
 
     Question: {question}
     Context: {context}
