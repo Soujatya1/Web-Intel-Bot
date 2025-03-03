@@ -1,3 +1,4 @@
+
 import streamlit as st
 from langchain.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -9,40 +10,12 @@ from langchain_core.prompts import ChatPromptTemplate
 st.title("Web Content GeN-ie")
 st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
 
-def get_prompt_based_on_query(question, context):
-    if "oldest" in question.lower():
-        return f"""
-        Use the retrieved context to find the **oldest** circular by date.
-
-        If multiple circulars are found, always return the one with the **earliest date**.
-
-        Question: {question}
-        Context: {context}
-        
-        Answer (specify the **oldest** document's date clearly and provide a link if available):
-        """
-    
-    elif "latest" in question.lower() or "newest" in question.lower():
-        return f"""
-        Use the retrieved context to find the **most recent** circular by date.
-
-        If multiple circulars are found, always return the one with the **latest date**.
-
-        Question: {question}
-        Context: {context}
-        
-        Answer (specify the **latest** document's date clearly and provide a link if available):
-        """
-    
-    else:
-        return f"""
-        Use the retrieved context to answer the question concisely.
-
-        Question: {question}
-        Context: {context}
-        
-        Answer:
-        """
+template = """
+You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
+Question: {question} 
+Context: {context} 
+Answer:
+"""
 
 WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
@@ -82,19 +55,29 @@ def retrieve_docs(query):
     return st.session_state.vector_store.similarity_search(query, k=2)
 
 def answer_question(question, documents):
+    """Generate an answer"""
     if not documents:
         return "I couldn’t find relevant information to answer this question."
 
     context = "\n\n".join([doc.page_content for doc in documents])
 
-    # Select prompt dynamically
-    prompt_text = get_prompt_based_on_query(question, context)
+    enhanced_template = """
+    You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
+    If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
 
-    prompt = ChatPromptTemplate.from_template(prompt_text)
+    Question: {question}
+    Context: {context}
+    
+    Answer (include relevant links if applicable):
+    """
+
+    prompt = ChatPromptTemplate.from_template(enhanced_template)
     chain = prompt | model
     response = chain.invoke({"question": question, "context": context})
+    
+    answer = response.content if response.content else "I couldn’t generate a proper response."
 
-    return response.content if response.content else "I couldn’t generate a proper response."
+    return answer
 
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
