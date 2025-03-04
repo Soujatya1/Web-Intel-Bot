@@ -93,7 +93,6 @@ def answer_question(question, documents):
 
     context = "\n\n".join([doc.page_content for doc in documents])
 
-    # New Prompt: Ask LLM to find the best link from the context
     enhanced_template = """
     You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
     If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
@@ -129,10 +128,8 @@ question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UID
 if question and "web_content_indexed" in st.session_state:
     st.session_state.conversation_history.append({"role": "user", "content": question})
 
-    # Retrieve relevant documents from the vector store
     related_documents = retrieve_docs(question)
 
-    # Let the LLM extract relevant links from the context
     answer = answer_question(question, related_documents)
 
     st.session_state.conversation_history.append({"role": "assistant", "content": answer})
