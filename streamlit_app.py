@@ -23,7 +23,9 @@ Answer:
 
 WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html",
+    "https://uidai.gov.in/en/ecosystem/authentication-ecosystem/operation-model.html",
+    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html"
 ]
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
