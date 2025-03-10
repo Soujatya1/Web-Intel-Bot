@@ -1,140 +1,100 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-from langchain_core.documents.base import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.document_loaders import UnstructuredURLLoader
+from langchain.text_splitter import CharacterTextSplitter
+import faiss
 from langchain.vectorstores import FAISS
 from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.embeddings import HuggingFaceEmbeddings
-import faiss
-import time
-import numpy as np
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.chains import RetrievalQAWithSourcesChain
 
-st.title("Web Content GeN-ie")
-st.subheader("Chat with content from IRDAI, e-Gazette, ED PMLA, and UIDAI")
+# Set page title
+st.set_page_config(page_title="UIDAI Document QA System")
+st.title("UIDAI Document QA System")
 
-template = """
-You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
-Question: {question} 
-Context: {context} 
-Answer:
-"""
-
-WEBSITES = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html",
-    "https://uidai.gov.in/en/ecosystem/authentication-ecosystem/operation-model.html",
-    "https://uidai.gov.in/en/ecosystem/enrolment-ecosystem/enrolment-agencies.html"
+# Fixed configuration
+urls = [
+    'https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html',
+    'https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html'
 ]
+api_key = "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"
+model_name = "llama-3.3-70b-versatile"
+chunk_size = 1000
+chunk_overlap = 200
+k_value = 4
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# Initialize session state
+if 'system_initialized' not in st.session_state:
+    st.session_state.system_initialized = False
+if 'chain' not in st.session_state:
+    st.session_state.chain = None
 
-model = ChatGroq(
-    groq_api_key="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",
-    model_name="llama3-70b-8192",
-    temperature=0
-)
+# Function to initialize the system
+def initialize_system():
+    with st.spinner("Loading documents and initializing the system..."):
+        try:
+            # Initialize LLM
+            llm = ChatGroq(groq_api_key=api_key, model_name=model_name)
+            
+            # Initialize embeddings
+            embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+            
+            # Load documents
+            loader = UnstructuredURLLoader(urls=urls)
+            data = loader.load()
+            
+            # Split documents
+            text_splitter = CharacterTextSplitter(separator='\n', chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            docs = text_splitter.split_documents(data)
+            
+            # Create vector store
+            vectorstore = FAISS.from_documents(docs, embedding)
+            retriever = vectorstore.as_retriever(search_kwargs={"k": k_value})
+            
+            # Create chain
+            chain = RetrievalQAWithSourcesChain.from_llm(
+                llm=llm,
+                retriever=retriever,
+                return_source_documents=True
+            )
+            
+            # Save to session state
+            st.session_state.chain = chain
+            st.session_state.system_initialized = True
+            
+            return True
+            
+        except Exception as e:
+            st.error(f"Error initializing system: {e}")
+            return False
 
-def fetch_web_content(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = " ".join([p.get_text(strip=True) for p in soup.find_all(["p", "h1", "h2", "h3", "li"])])
-
-            # Include all hyperlinks found on the page
-            links = [a["href"] for a in soup.find_all("a", href=True) if "http" in a["href"]]
-            text += "\n\n🔗 Related Links:\n" + "\n".join(links)
-
-            return Document(page_content=text, metadata={"source": url})
-    except Exception:
-        return None
-    return None
-
-if "pdf_store" not in st.session_state:
-    st.session_state.pdf_store = []
-
-if "pdf_index" not in st.session_state:
-    st.session_state.pdf_index = None
-    st.session_state.pdf_mapping = {}
-
-def load_web_content():
-    all_documents = []
-
-    for url in WEBSITES:
-        doc = fetch_web_content(url)
-        if doc:
-            all_documents.append(doc)
-
-    return all_documents
-
-def split_text(documents):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=200, add_start_index=True)
-    return text_splitter.split_documents(documents)
-
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-
-def index_docs(documents):
-    if documents:
-        st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
-
-def retrieve_docs(query):
-    if st.session_state.vector_store is None:
-        return []
-    return st.session_state.vector_store.similarity_search(query, k=2)
-
-def answer_question(question, documents):
-    """Generate an answer and ask the LLM to extract relevant links."""
-    if not documents:
-        return "I couldn’t find relevant information to answer this question."
-
-    context = "\n\n".join([doc.page_content for doc in documents])
-
-    enhanced_template = """
-    You are an assistant for question-answering tasks. Use the following retrieved context to answer the question concisely.
-    If there is a URL or document reference in the context that is highly relevant to the question, include it in your response.
-
-    Question: {question}
-    Context: {context}
+# Main interface
+if not st.session_state.system_initialized:
+    st.info("Click the button below to load documents and initialize the system.")
+    if st.button("Initialize System", type="primary"):
+        initialize_system()
+else:
+    st.success("System is ready! Ask any question about UIDAI documents.")
     
-    Answer (include relevant links if applicable):
-    """
-
-    prompt = ChatPromptTemplate.from_template(enhanced_template)
-    chain = prompt | model
-    response = chain.invoke({"question": question, "context": context})
+    # Question input
+    question = st.text_input("Enter your question:")
     
-    answer = response.content if response.content else "I couldn’t generate a proper response."
+    if question:
+        with st.spinner("Generating answer..."):
+            try:
+                # Get answer
+                result = st.session_state.chain({"question": question})
+                
+                # Display answer
+                st.subheader("Answer")
+                st.write(result["answer"])
+                
+                # Display sources in a simple way
+                st.subheader("Sources")
+                for i, source in enumerate(result.get("source_documents", [])):
+                    st.write(f"Source {i+1}: {source.metadata.get('source', 'Unknown source')}")
+                
+            except Exception as e:
+                st.error(f"Error generating answer: {e}")
 
-    return answer
-
-
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-
-if "web_content_indexed" not in st.session_state:
-    all_documents = load_web_content()
-
-    if all_documents:
-        chunked_documents = split_text(all_documents)
-        index_docs(chunked_documents)
-        st.session_state.web_content_indexed = True
-
-question = st.chat_input("Ask a question about IRDAI, e-Gazette, ED PMLA, or UIDAI:")
-
-if question and "web_content_indexed" in st.session_state:
-    st.session_state.conversation_history.append({"role": "user", "content": question})
-
-    related_documents = retrieve_docs(question)
-
-    answer = answer_question(question, related_documents)
-
-    st.session_state.conversation_history.append({"role": "assistant", "content": answer})
-
-# Display conversation history
-for message in st.session_state.conversation_history:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
+# Footer
+st.caption("This application answers questions about UIDAI documents using LangChain and Groq LLM.")
