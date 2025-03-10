@@ -1,12 +1,11 @@
 import streamlit as st
-from langchain.document_loaders import UnstructuredURLLoader, WebBaseLoader
-from langchain.text_splitter import CharacterTextSplitter, RecursiveCharacterTextSplitter
+from langchain.document_loaders import WebBaseLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 from langchain.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQAWithSourcesChain
-import time
 import traceback
 
 # Set page title
@@ -45,55 +44,34 @@ def initialize_system():
         progress_placeholder.text("Loading embeddings model...")
         embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
         
-        # Load documents - try alternative loader if first one fails
+        # Load documents using WebBaseLoader
         progress_placeholder.text("Loading documents from URLs (this may take a moment)...")
-        try:
-            # Try UnstructuredURLLoader first
-            loader = UnstructuredURLLoader(urls=urls)
-            data = loader.load()
-            if not data:  # If no documents were loaded
-                raise ValueError("No documents loaded with UnstructuredURLLoader")
-        except Exception as e:
-            # If UnstructuredURLLoader fails, try WebBaseLoader
-            st.session_state.debug_info += f"UnstructuredURLLoader failed: {str(e)}\nTrying WebBaseLoader instead...\n"
-            progress_placeholder.text("Trying alternative document loader...")
-            
-            data = []
-            for url in urls:
-                try:
-                    loader = WebBaseLoader(url)
-                    docs = loader.load()
-                    data.extend(docs)
-                    st.session_state.debug_info += f"Loaded {len(docs)} documents from {url}\n"
-                except Exception as url_e:
-                    st.session_state.debug_info += f"Error loading {url}: {str(url_e)}\n"
-            
-            if not data:
-                raise ValueError("Failed to load any documents from the provided URLs")
+        
+        data = []
+        for url in urls:
+            try:
+                loader = WebBaseLoader(url)
+                docs = loader.load()
+                data.extend(docs)
+                st.session_state.debug_info += f"Loaded {len(docs)} documents from {url}\n"
+            except Exception as url_e:
+                st.session_state.debug_info += f"Error loading {url}: {str(url_e)}\n"
+        
+        if not data:
+            raise ValueError("Failed to load any documents from the provided URLs")
         
         progress_placeholder.text(f"Successfully loaded {len(data)} documents.")
         st.session_state.debug_info += f"Total documents loaded: {len(data)}\n"
         
         # Split documents
         progress_placeholder.text("Splitting documents into chunks...")
-        try:
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                separators=["\n\n", "\n", " ", ""]
-            )
-            docs = text_splitter.split_documents(data)
-            st.session_state.debug_info += f"Split into {len(docs)} chunks\n"
-        except Exception as split_e:
-            st.session_state.debug_info += f"Error during text splitting: {str(split_e)}\nTrying simple splitter...\n"
-            # Fall back to simpler splitter
-            text_splitter = CharacterTextSplitter(
-                separator="\n",
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                length_function=len
-            )
-            docs = text_splitter.split_documents(data)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        docs = text_splitter.split_documents(data)
+        st.session_state.debug_info += f"Split into {len(docs)} chunks\n"
         
         progress_placeholder.text(f"Split into {len(docs)} chunks")
         
@@ -125,19 +103,27 @@ def initialize_system():
         st.error(f"Error initializing system: {str(e)}")
         return False
 
-# Main interface
-if not st.session_state.system_initialized:
-    st.info("Click the button below to load documents and initialize the system.")
-    if st.button("Initialize System", type="primary"):
-        with st.spinner("Loading documents and initializing the system..."):
-            initialize_system()
-else:
-    st.success("System is ready! Ask any question about UIDAI documents.")
-    
-    # Question input
+# Status area - always visible
+status_container = st.container()
+
+# Question area - always visible
+question_container = st.container()
+
+# Main interface logic
+with status_container:
+    if not st.session_state.system_initialized:
+        st.info("Click the button below to load documents and initialize the system.")
+        if st.button("Initialize System", type="primary"):
+            with st.spinner("Loading documents and initializing the system..."):
+                initialize_system()
+    else:
+        st.success("System is ready! Ask any question about UIDAI documents.")
+
+# Question input is always visible
+with question_container:
     question = st.text_input("Enter your question:")
     
-    if question:
+    if question and st.session_state.system_initialized:
         with st.spinner("Generating answer..."):
             try:
                 # Get answer
@@ -158,6 +144,8 @@ else:
                 
             except Exception as e:
                 st.error(f"Error generating answer: {str(e)}")
+    elif question and not st.session_state.system_initialized:
+        st.warning("Please initialize the system first by clicking the 'Initialize System' button above.")
 
 # Debug information (hidden by default)
 with st.expander("Debug Information", expanded=False):
