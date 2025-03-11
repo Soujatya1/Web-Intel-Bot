@@ -58,7 +58,6 @@ with st.sidebar:
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
     
-    # Advanced options
     st.subheader("Advanced Options")
     with st.expander("Scraping Options"):
         chunk_size = st.slider("Chunk Size", 500, 2000, 1000)
@@ -99,7 +98,6 @@ def classify_website(url):
         return "general"
 
 def enhanced_scrape_page(url, retries=2):
-    """Enhanced scraper that handles different website types"""
     website_type = classify_website(url)
     
     headers = {
@@ -115,20 +113,16 @@ def enhanced_scrape_page(url, retries=2):
     for attempt in range(retries):
         try:
             response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()  # Raise exception for HTTP errors
+            response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Remove script and style elements
             for script in soup(["script", "style", "nav", "footer"]):
                 script.extract()
             
-            # Extract page title
             title = soup.title.string if soup.title else "No Title"
             
-            # Different scraping strategies based on website type
             if website_type == "egazette":
-                # For eGazette - focus on main content and tables
                 main_elements = soup.select('div#pnlSearchData, table.table, div.content_para')
                 
                 if main_elements:
@@ -141,13 +135,10 @@ def enhanced_scrape_page(url, retries=2):
                             ))
                 
             elif "irdai" in website_type:
-                # For IRDAI sites - check for common patterns
                 main_content = soup.select_one('main, #content, .content, .portlet-content, .journal-content-article')
                 
                 if main_content:
                     content = main_content.get_text(separator="\n", strip=True)
-                    
-                    # Extract tables specially to preserve structure
                     tables = main_content.select('table')
                     table_contents = []
                     
@@ -161,7 +152,6 @@ def enhanced_scrape_page(url, retries=2):
                     
                     table_text = "\n".join(table_contents)
                     
-                    # Combine content and table text
                     if table_text and not table_text in content:
                         content = f"{content}\n\nTabular Data:\n{table_text}"
                     
@@ -170,7 +160,6 @@ def enhanced_scrape_page(url, retries=2):
                         metadata={"source": url, "type": website_type}
                     ))
                 
-                # Handle document listings
                 document_listings = soup.select('.document-content, .document-container, .lfr-search-container-wrapper tbody tr')
                 
                 if document_listings:
@@ -187,7 +176,6 @@ def enhanced_scrape_page(url, retries=2):
                         ))
             
             elif "uidai" in website_type:
-                # For UIDAI sites
                 main_content = soup.select_one('#maincontent, .main-content, article')
                 
                 if main_content:
@@ -197,7 +185,6 @@ def enhanced_scrape_page(url, retries=2):
                         metadata={"source": url, "type": website_type}
                     ))
                     
-                    # Extract links to documents
                     links = main_content.select('a[href$=".pdf"], a[href$=".doc"], a[href$=".docx"]')
                     if links:
                         link_text = []
@@ -210,7 +197,6 @@ def enhanced_scrape_page(url, retries=2):
                         ))
             
             else:
-                # General fallback scraping
                 main_content = soup.select_one('main, #content, .content, article, .container')
                 
                 if main_content:
@@ -220,31 +206,25 @@ def enhanced_scrape_page(url, retries=2):
                         metadata={"source": url, "type": website_type}
                     ))
             
-            # Fallback if no content was extracted
             if not documents:
-                # Get text from body, excluding scripts, styles, etc.
                 body_text = soup.body.get_text(separator="\n", strip=True) if soup.body else ""
                 
-                # Split into paragraphs and filter out empty ones
                 paragraphs = [p for p in body_text.split("\n\n") if p.strip()]
                 
-                # Join paragraphs, but limit to avoid huge documents
-                content = "\n\n".join(paragraphs[:50])  # Take only first 50 paragraphs
+                content = "\n\n".join(paragraphs[:50])
                 
                 documents.append(Document(
                     page_content=f"{title}\n{content}",
                     metadata={"source": url, "type": website_type}
                 ))
             
-            # If we got documents, break out of retry loop
             if documents:
                 break
                 
         except Exception as e:
             st.warning(f"Attempt {attempt+1} for {url} failed: {str(e)}")
-            time.sleep(2)  # Wait before retry
+            time.sleep(2)
     
-    # If no documents after all retries, create a placeholder
     if not documents:
         documents.append(Document(
             page_content=f"Unable to extract content from {url}",
@@ -259,21 +239,17 @@ def process_websites(urls_list):
             all_documents = []
             progress_bar = st.progress(0)
             
-            # Process all websites with enhanced scraper
             for i, url in enumerate(urls_list):
                 st.write(f"Processing URL ({i+1}/{len(urls_list)}): {url}")
                 
-                # Try WebBaseLoader first
                 try:
                     loader = WebBaseLoader(url)
                     web_documents = loader.load()
                     
-                    # If WebBaseLoader returns empty or tiny content, use enhanced scraper
                     if not web_documents or sum(len(doc.page_content) for doc in web_documents) < 500:
                         st.write(f"WebBaseLoader returned insufficient content, trying enhanced scraper for {url}")
                         documents = enhanced_scrape_page(url, retries=max_retries)
                     else:
-                        # Set metadata on WebBaseLoader documents
                         for doc in web_documents:
                             if 'source' not in doc.metadata:
                                 doc.metadata['source'] = url
@@ -346,7 +322,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
         output_key="answer"
     )
     
-    # Enhanced prompt template for better context understanding
     prompt_template = """
     You are an assistant that helps with information from government websites including IRDAI, UIDAI, and the eGazette.
     
@@ -379,9 +354,8 @@ if groq_api_key and st.session_state.vectorstore is not None:
         with st.chat_message("user"):
             st.write(prompt)
         
-        # Determine optimal number of documents based on query complexity
         query_complexity = len(prompt.split())
-        k_docs = min(max(3, query_complexity // 5), 8)  # Between 3 and 8 docs
+        k_docs = min(max(3, query_complexity // 5), 8)
         
         relevant_sources, relevant_docs = get_relevant_sources(prompt, st.session_state.vectorstore, k=k_docs)
         
@@ -408,7 +382,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
             
             answer = response['answer']
             
-            # Add source type information
             source_info = ""
             if doc_types:
                 source_info = "\n\nInformation sources: " + ", ".join(doc_types)
@@ -416,7 +389,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
         with st.chat_message("assistant"):
             st.write(answer)
             
-            # Show debug info in expander
             with st.expander("Source Information"):
                 st.write("**Document Types Used:**")
                 for doc_type in doc_types:
