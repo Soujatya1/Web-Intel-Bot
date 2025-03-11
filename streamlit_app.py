@@ -13,8 +13,7 @@ import time
 
 # Predefined URLs to process
 PREDEFINED_URLS = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
 # Set page title
