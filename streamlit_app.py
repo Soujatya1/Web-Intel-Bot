@@ -41,11 +41,11 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 
 # Web content selection section
-st.header("Select Web Content")
-selected_website = st.selectbox("Choose a website to analyze:", list(websites.keys()))
-web_url = websites[selected_website]
-st.write(f"Selected URL: {web_url}")
-process_button = st.button("Process Website")
+#st.header("Select Web Content")
+#selected_website = st.selectbox("Choose a website to analyze:", list(websites.keys()))
+#web_url = websites[selected_website]
+#st.write(f"Selected URL: {web_url}")
+#process_button = st.button("Process Website")
 
 # Function to load and process the website
 def process_website(url):
