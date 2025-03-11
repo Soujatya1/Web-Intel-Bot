@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 from langchain.document_loaders import WebBaseLoader
-from langchain_community.document_loaders import SeleniumURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 from langchain.vectorstores import FAISS
@@ -17,7 +16,7 @@ import time
 st.title("Website Q&A System")
 
 WEBSITES = [
-    "https://egazette.gov.in/(S(jjko5lh5lpdta4yyxrdk4lfu))/Default.aspx", "https://irdai.gov.in/web/guest/whats-new", "https://irdai.gov.in/directory-of-employees",
+    "https://irdai.gov.in/web/guest/whats-new", "https://irdai.gov.in/directory-of-employees",
     "https://irdai.gov.in/warnings-and-penalties", "https://uidai.gov.in/en/about-uidai/legal-framework.html",
     "https://irdai.gov.in/rules", "https://irdai.gov.in/consolidated-gazette-notified-regulations", "https://irdai.gov.in/notifications",
     "https://irdai.gov.in/circulars", "https://irdai.gov.in/orders1", "https://irdai.gov.in/exposure-drafts", "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
@@ -29,8 +28,6 @@ WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
     "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules-en.html"
 ]
-
-DYNAMIC_WEBSITES = ["egazette.gov.in"]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -68,28 +65,13 @@ st.header("Websites to Process")
 for i, website in enumerate(WEBSITES, 1):
     st.write(f"{i}. {website}")
 
-def needs_selenium(url):
-    """Check if the website needs Selenium for rendering"""
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-    return any(dynamic_site in domain for dynamic_site in DYNAMIC_WEBSITES)
-
 def process_websites(urls_list):
     with st.spinner("Loading and processing websites... This may take a few minutes."):
         try:
             all_chunks = []
             
-            regular_urls = []
-            selenium_urls = []
-            
             for url in urls_list:
-                if needs_selenium(url):
-                    selenium_urls.append(url)
-                else:
-                    regular_urls.append(url)
-            
-            for url in regular_urls:
-                st.write(f"Processing regular URL: {url}")
+                st.write(f"Processing URL: {url}")
                 
                 loader = WebBaseLoader(url)
                 documents = loader.load()
@@ -104,32 +86,6 @@ def process_websites(urls_list):
                 )
                 chunks = text_splitter.split_documents(documents)
                 all_chunks.extend(chunks)
-            
-            if selenium_urls:
-                st.write(f"Processing dynamic URLs with Selenium: {', '.join(selenium_urls)}")
-                
-                selenium_loader = SeleniumURLLoader(
-                    urls=selenium_urls,
-                    continue_on_failure=True
-                )
-                
-                selenium_documents = selenium_loader.load()
-                
-                for doc in selenium_documents:
-                    if 'source' not in doc.metadata:
-                        for url in selenium_urls:
-                            if url in doc.page_content[:1000]:
-                                doc.metadata['source'] = url
-                                break
-                        else:
-                            doc.metadata['source'] = selenium_urls[0]
-                
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1000,
-                    chunk_overlap=200
-                )
-                selenium_chunks = text_splitter.split_documents(selenium_documents)
-                all_chunks.extend(selenium_chunks)
             
             # Create vector store
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
