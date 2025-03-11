@@ -12,7 +12,7 @@ from langchain.memory import ConversationBufferMemory
 # Set page title
 st.title("Web-based Q&A System")
 
-# Hardcoded website options
+# Hardcoded websites to process
 websites = {
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 }
@@ -39,44 +39,51 @@ if "chat_history" not in st.session_state:
     
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
+    
+if "websites_processed" not in st.session_state:
+    st.session_state.websites_processed = False
 
-# Web content selection section
-#st.header("Select Web Content")
-#selected_website = st.selectbox("Choose a website to analyze:", list(websites.keys()))
-#web_url = websites[selected_website]
-#st.write(f"Selected URL: {web_url}")
-#process_button = st.button("Process Website")
-
-# Function to load and process the website
-def process_website(url):
-    with st.spinner("Loading and processing the website..."):
+# Function to load and process websites
+def process_websites(urls_dict):
+    with st.spinner("Loading and processing websites... This may take a few minutes."):
         try:
-            # Load the website content
-            loader = WebBaseLoader(url)
-            documents = loader.load()
+            all_chunks = []
             
-            # Split the content into chunks
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
-            chunks = text_splitter.split_documents(documents)
+            for name, url in urls_dict.items():
+                st.write(f"Processing {name}...")
+                
+                # Load the website content
+                loader = WebBaseLoader(url)
+                documents = loader.load()
+                
+                # Split the content into chunks
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200
+                )
+                chunks = text_splitter.split_documents(documents)
+                all_chunks.extend(chunks)
             
             # Create embeddings and vector store
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
-            vectorstore = FAISS.from_documents(chunks, embeddings)
+            vectorstore = FAISS.from_documents(all_chunks, embeddings)
             
             st.session_state.vectorstore = vectorstore
-            st.success(f"Successfully processed {url}. You can now ask questions!")
+            st.session_state.websites_processed = True
+            st.success(f"Successfully processed all websites. You can now ask questions!")
             return True
         
         except Exception as e:
-            st.error(f"Error processing the website: {str(e)}")
+            st.error(f"Error processing websites: {str(e)}")
             return False
 
-# Process website if button is clicked
-#if process_button:
-#    process_website(web_url)
+# Process websites if not already processed
+if not st.session_state.websites_processed:
+    st.header("Processing Websites")
+    st.write("The system is retrieving data from the following websites:")
+    for name, url in websites.items():
+        st.write(f"• {name}: {url}")
+    process_websites(websites)
 
 # Q&A section
 st.header("Ask Questions")
@@ -111,7 +118,7 @@ if groq_api_key and st.session_state.vectorstore is not None:
             st.write(message["content"])
     
     # Chat input
-    if prompt := st.chat_input("Ask a question about the website content:"):
+    if prompt := st.chat_input("Ask a question about the websites:"):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         
@@ -137,6 +144,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
         st.session_state.messages.append({"role": "assistant", "content": response['answer']})
 
 elif st.session_state.vectorstore is None:
-    st.info("Process a website first before asking questions.")
+    st.info("Processing websites... Please wait.")
 elif not groq_api_key:
     st.warning("Please enter your Groq API key in the sidebar.")
