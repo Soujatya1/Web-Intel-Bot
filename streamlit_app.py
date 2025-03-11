@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from langchain.document_loaders import WebBaseLoader
+from langchain.document_loaders import WebBaseLoader, SeleniumURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 from langchain.vectorstores import FAISS
@@ -11,6 +11,7 @@ from langchain.memory import ConversationBufferMemory
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import time
 
 st.title("Website Q&A System")
 
@@ -18,6 +19,9 @@ WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html",
     "https://egazette.gov.in/(S(jjko5lh5lpdta4yyxrdk4lfu))/Default.aspx"
 ]
+
+# Identify which websites need Selenium for proper rendering
+DYNAMIC_WEBSITES = ["egazette.gov.in"]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -47,21 +51,30 @@ st.header("Websites to Process")
 for i, website in enumerate(WEBSITES, 1):
     st.write(f"{i}. {website}")
 
+def needs_selenium(url):
+    """Check if the website needs Selenium for rendering"""
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    return any(dynamic_site in domain for dynamic_site in DYNAMIC_WEBSITES)
+
 def process_websites(urls_list):
     with st.spinner("Loading and processing websites... This may take a few minutes."):
         try:
             all_chunks = []
             
+            # Group URLs by loader type needed
+            regular_urls = []
+            selenium_urls = []
+            
             for url in urls_list:
-                st.write(f"Processing: {url}")
-                
-                parsed_url = urlparse(url)
-                domain = parsed_url.netloc
-                path_parts = [p for p in parsed_url.path.split('/') if p]
-                if path_parts:
-                    webpage_id = f"{domain}_{path_parts[-1]}"
+                if needs_selenium(url):
+                    selenium_urls.append(url)
                 else:
-                    webpage_id = domain
+                    regular_urls.append(url)
+            
+            # Process regular URLs
+            for url in regular_urls:
+                st.write(f"Processing regular URL: {url}")
                 
                 loader = WebBaseLoader(url)
                 documents = loader.load()
@@ -77,6 +90,33 @@ def process_websites(urls_list):
                 chunks = text_splitter.split_documents(documents)
                 all_chunks.extend(chunks)
             
+            # Process Selenium URLs
+            if selenium_urls:
+                st.write(f"Processing dynamic URLs with Selenium: {', '.join(selenium_urls)}")
+                
+                # Custom settings for Selenium - may need adjustment
+                selenium_loader = SeleniumURLLoader(
+                    urls=selenium_urls,
+                    continue_on_failure=True,
+                    wait_for_timeout=10  # Give more time for dynamic content to load
+                )
+                
+                selenium_documents = selenium_loader.load()
+                
+                for doc in selenium_documents:
+                    if 'source' not in doc.metadata:
+                        for url in selenium_urls:
+                            if url in doc.page_content[:1000]:  # Rough check to match content with URL
+                                doc.metadata['source'] = url
+                                break
+                        else:
+                            # If no match found, use the first URL as default source
+                            doc.metadata['source'] = selenium_urls[0]
+                
+                selenium_chunks = text_splitter.split_documents(selenium_documents)
+                all_chunks.extend(selenium_chunks)
+            
+            # Create vector store
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
             vectorstore = FAISS.from_documents(all_chunks, embeddings)
             
