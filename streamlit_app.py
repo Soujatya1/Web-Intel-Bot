@@ -263,7 +263,6 @@ def process_websites(urls_list):
                 all_documents.extend(documents)
                 progress_bar.progress((i + 1) / len(urls_list))
             
-            # Split documents into chunks
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap
@@ -272,7 +271,6 @@ def process_websites(urls_list):
             st.write("Splitting documents into chunks...")
             all_chunks = text_splitter.split_documents(all_documents)
             
-            # Create vector store
             st.write(f"Creating vector store with {len(all_chunks)} chunks...")
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
             vectorstore = FAISS.from_documents(all_chunks, embeddings)
