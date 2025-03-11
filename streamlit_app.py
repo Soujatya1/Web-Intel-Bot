@@ -135,13 +135,3 @@ elif not groq_api_key and web_url:
     st.warning("Please enter your Groq API key in the sidebar.")
 else:
     st.info("Enter a website URL and process it to start asking questions.")
-
-# Add information about the application
-with st.expander("About this App"):
-    st.markdown("""
-    This Q&A application allows you to:
-    1. Load content from any website
-    2. Process and index the content using FAISS vector database
-    3. Ask questions about the website content
-    4. Get AI-powered answers using Groq's language models
-    """)
