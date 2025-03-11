@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 from langchain.document_loaders import WebBaseLoader
-from langchain_community.document_loaders.selenium import SeleniumURLLoader
+from langchain_community.document_loaders import SeleniumURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 from langchain.vectorstores import FAISS
