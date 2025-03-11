@@ -21,7 +21,6 @@ WEBSITES = [
     "https://egazette.gov.in/(S(jjko5lh5lpdta4yyxrdk4lfu))/Default.aspx"
 ]
 
-# Identify which websites need Selenium for proper rendering
 DYNAMIC_WEBSITES = ["egazette.gov.in"]
 
 if "messages" not in st.session_state:
@@ -63,7 +62,6 @@ def process_websites(urls_list):
         try:
             all_chunks = []
             
-            # Group URLs by loader type needed
             regular_urls = []
             selenium_urls = []
             
@@ -73,7 +71,6 @@ def process_websites(urls_list):
                 else:
                     regular_urls.append(url)
             
-            # Process regular URLs
             for url in regular_urls:
                 st.write(f"Processing regular URL: {url}")
                 
@@ -91,11 +88,9 @@ def process_websites(urls_list):
                 chunks = text_splitter.split_documents(documents)
                 all_chunks.extend(chunks)
             
-            # Process Selenium URLs
             if selenium_urls:
                 st.write(f"Processing dynamic URLs with Selenium: {', '.join(selenium_urls)}")
                 
-                # Correct import used: langchain_community.document_loaders.SeleniumURLLoader
                 selenium_loader = SeleniumURLLoader(
                     urls=selenium_urls,
                     continue_on_failure=True
@@ -106,11 +101,10 @@ def process_websites(urls_list):
                 for doc in selenium_documents:
                     if 'source' not in doc.metadata:
                         for url in selenium_urls:
-                            if url in doc.page_content[:1000]:  # Rough check to match content with URL
+                            if url in doc.page_content[:1000]:
                                 doc.metadata['source'] = url
                                 break
                         else:
-                            # If no match found, use the first URL as default source
                             doc.metadata['source'] = selenium_urls[0]
                 
                 text_splitter = RecursiveCharacterTextSplitter(
