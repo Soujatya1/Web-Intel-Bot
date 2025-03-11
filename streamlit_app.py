@@ -27,8 +27,7 @@ WEBSITES = [
     "https://enforcementdirectorate.gov.in/bsa", "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
     "https://uidai.gov.in/en/about-uidai/legal-framework/notification.html", "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules-en.html",
-    ""
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules-en.html"
 ]
 
 DYNAMIC_WEBSITES = ["egazette.gov.in"]
