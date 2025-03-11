@@ -14,7 +14,7 @@ st.title("Web-based Q&A System")
 
 # Hardcoded websites to process
 websites = {
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "Circulars": "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "Regulations": "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 }
 
 # API configuration sidebar
