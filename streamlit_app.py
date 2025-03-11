@@ -56,6 +56,11 @@ def process_websites(urls_dict):
                 loader = WebBaseLoader(url)
                 documents = loader.load()
                 
+                # Make sure each document has metadata with source URL
+                for doc in documents:
+                    if 'source' not in doc.metadata:
+                        doc.metadata['source'] = url
+                
                 # Split the content into chunks
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=1000,
@@ -88,6 +93,17 @@ if not st.session_state.websites_processed:
 # Q&A section
 st.header("Ask Questions")
 
+# Function to get relevant sources for a query
+def get_relevant_sources(query, vectorstore, k=3):
+    relevant_docs = vectorstore.similarity_search(query, k=k)
+    sources = []
+    for doc in relevant_docs:
+        if 'source' in doc.metadata:
+            source_url = doc.metadata['source']
+            if source_url not in sources:
+                sources.append(source_url)
+    return sources
+
 # Create the LLM-based QA chain when API key is provided
 if groq_api_key and st.session_state.vectorstore is not None:
     # Set the API key
@@ -109,7 +125,8 @@ if groq_api_key and st.session_state.vectorstore is not None:
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=st.session_state.vectorstore.as_retriever(),
-        memory=memory
+        memory=memory,
+        return_source_documents=True  # This ensures source docs are returned
     )
     
     # Display chat messages
@@ -126,6 +143,9 @@ if groq_api_key and st.session_state.vectorstore is not None:
         with st.chat_message("user"):
             st.write(prompt)
         
+        # Get relevant sources before the chain call
+        relevant_sources = get_relevant_sources(prompt, st.session_state.vectorstore, k=3)
+        
         # Get the response from the conversation chain
         with st.spinner("Thinking..."):
             response = conversation_chain.invoke({
@@ -133,15 +153,40 @@ if groq_api_key and st.session_state.vectorstore is not None:
                 "chat_history": st.session_state.chat_history
             })
             
+            # Get source documents from the response
+            source_docs = response.get('source_documents', [])
+            
+            # Extract source URLs from returned documents
+            sources = []
+            for doc in source_docs:
+                if 'source' in doc.metadata:
+                    source_url = doc.metadata['source']
+                    if source_url not in sources:
+                        sources.append(source_url)
+            
+            # If no sources from response, use the pre-fetched relevant sources
+            if not sources:
+                sources = relevant_sources
+            
             # Update conversation history
             st.session_state.chat_history.append((prompt, response['answer']))
         
         # Display assistant response in chat
         with st.chat_message("assistant"):
             st.write(response['answer'])
+            
+            # Display source links
+            if sources:
+                st.write("---")
+                st.write("**Relevant Sources:**")
+                for i, source in enumerate(sources, 1):
+                    st.write(f"{i}. [{source}]({source})")
         
         # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": response['answer']})
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": response['answer'] + "\n\nRelevant Sources:\n" + "\n".join(sources)
+        })
 
 elif st.session_state.vectorstore is None:
     st.info("Processing websites... Please wait.")
