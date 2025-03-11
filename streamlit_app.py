@@ -14,7 +14,6 @@ from urllib.parse import urlparse
 
 st.title("Website Q&A System")
 
-# Hardcoded list of websites to process
 WEBSITES = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
@@ -43,7 +42,6 @@ with st.sidebar:
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
 
-# Display the hardcoded websites
 st.header("Websites to Process")
 for i, website in enumerate(WEBSITES, 1):
     st.write(f"{i}. {website}")
@@ -64,7 +62,6 @@ def process_websites(urls_list):
                 else:
                     webpage_id = domain
                 
-                # Load the website content
                 loader = WebBaseLoader(url)
                 documents = loader.load()
                 
