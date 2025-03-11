@@ -75,8 +75,8 @@ def process_website(url):
             return False
 
 # Process website if button is clicked
-if process_button:
-    process_website(web_url)
+#if process_button:
+#    process_website(web_url)
 
 # Q&A section
 st.header("Ask Questions")
