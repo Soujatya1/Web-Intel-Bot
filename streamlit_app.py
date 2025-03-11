@@ -44,6 +44,9 @@ if "vectorstore" not in st.session_state:
 if "websites_processed" not in st.session_state:
     st.session_state.websites_processed = False
 
+if "embedding_model_used" not in st.session_state:
+    st.session_state.embedding_model_used = None
+
 with st.sidebar:
     st.header("Configuration")
     groq_api_key = st.text_input("Enter your Groq API Key:", type="password")
@@ -56,6 +59,11 @@ with st.sidebar:
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
 
+if st.session_state.embedding_model_used and st.session_state.embedding_model_used != embedding_model:
+    st.warning(f"Embedding model changed from {st.session_state.embedding_model_used} to {embedding_model}. Websites need to be reprocessed.")
+    st.session_state.websites_processed = False
+    st.session_state.vectorstore = None
+    
 st.header("Websites to Process")
 for i, website in enumerate(WEBSITES, 1):
     st.write(f"{i}. {website}")
@@ -126,7 +134,7 @@ def process_websites(urls_list):
             # Create vector store
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
             vectorstore = FAISS.from_documents(all_chunks, embeddings)
-            
+            st.session_state.embedding_model_used = embedding_model
             st.session_state.vectorstore = vectorstore
             st.session_state.websites_processed = True
             st.success(f"Successfully processed all websites. You can now ask questions!")
@@ -136,7 +144,12 @@ def process_websites(urls_list):
             st.error(f"Error processing websites: {str(e)}")
             return False
 
-if not st.session_state.websites_processed:
+if st.session_state.websites_processed:
+    if st.button("Reprocess Websites"):
+        st.session_state.websites_processed = False
+        st.session_state.vectorstore = None
+        process_websites(WEBSITES)
+else:
     if st.button("Process Websites"):
         process_websites(WEBSITES)
 
