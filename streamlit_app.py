@@ -10,12 +10,10 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-from urllib.parse import urljoin, urlparse
-import re
+from urllib.parse import urlparse
 
 # Set page title
-st.title("Website PDF Extractor & Q&A System")
+st.title("Website Q&A System")
 
 # Initialize session state
 if "messages" not in st.session_state:
@@ -29,12 +27,6 @@ if "vectorstore" not in st.session_state:
     
 if "websites_processed" not in st.session_state:
     st.session_state.websites_processed = False
-
-if "pdf_links" not in st.session_state:
-    st.session_state.pdf_links = {}
-
-if "pdf_metadata" not in st.session_state:
-    st.session_state.pdf_metadata = {}
 
 if "websites" not in st.session_state:
     st.session_state.websites = []
@@ -72,83 +64,8 @@ if st.session_state.websites:
     if st.button("Clear Websites List"):
         st.session_state.websites = []
         st.session_state.websites_processed = False
-        st.session_state.pdf_links = {}
-        st.session_state.pdf_metadata = {}
         st.session_state.vectorstore = None
         st.experimental_rerun()
-
-# Function to extract PDF links and metadata from any website
-def extract_pdf_links(url, visited=None):
-    if visited is None:
-        visited = set()
-    
-    if url in visited:
-        return {}
-    
-    visited.add(url)
-    
-    try:
-        st.write(f"Scanning: {url}")
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        pdf_links = {}
-        pdf_metadata = {}
-        
-        # Find all links on the page
-        links = soup.find_all('a')
-        for link in links:
-            href = link.get('href')
-            if not href:
-                continue
-                
-            # Make the URL absolute
-            full_url = urljoin(url, href)
-            
-            # Extract PDF links
-            if href.lower().endswith('.pdf'):
-                title = link.get_text().strip()
-                if not title:
-                    # Use the filename as title if no text
-                    title = os.path.basename(href)
-                
-                pdf_links[title] = full_url
-                
-                # Extract surrounding text for context (up to 300 characters)
-                parent = link.parent
-                context = parent.get_text().strip()
-                # Limit context length
-                context = context[:300] + ('...' if len(context) > 300 else '')
-                
-                # Store metadata
-                pdf_metadata[full_url] = {
-                    'title': title,
-                    'context': context,
-                    'source_url': url,
-                    'keywords': extract_keywords(title + " " + context)
-                }
-                
-                # Try to identify if it's a circular/regulation
-                is_circular = any(term in title.lower() or term in context.lower() 
-                                for term in ['circular', 'regulation', 'policy', 
-                                             'guideline', 'notice', 'notification',
-                                             'directive', 'rule', 'act', 'law'])
-                pdf_metadata[full_url]['is_circular'] = is_circular
-        
-        return pdf_links, pdf_metadata
-    
-    except Exception as e:
-        st.warning(f"Error scanning {url}: {str(e)}")
-        return {}, {}
-
-# Function to extract keywords from text
-def extract_keywords(text):
-    # Simple keyword extraction - split by spaces and remove common words
-    common_words = {'and', 'or', 'the', 'a', 'an', 'in', 'on', 'at', 'of', 'for', 'to', 'by'}
-    words = re.findall(r'\b\w+\b', text.lower())
-    keywords = [word for word in words if word not in common_words and len(word) > 2]
-    return keywords
 
 # Function to load and process websites
 def process_websites(urls_list):
@@ -168,12 +85,6 @@ def process_websites(urls_list):
                 else:
                     webpage_id = domain
                 
-                # Extract PDF links and metadata
-                pdf_links, pdf_metadata = extract_pdf_links(url)
-                st.session_state.pdf_links[url] = pdf_links
-                st.session_state.pdf_metadata.update(pdf_metadata)
-                st.write(f"Found {len(pdf_links)} PDF links.")
-                
                 # Load the website content
                 loader = WebBaseLoader(url)
                 documents = loader.load()
@@ -190,23 +101,6 @@ def process_websites(urls_list):
                 )
                 chunks = text_splitter.split_documents(documents)
                 all_chunks.extend(chunks)
-                
-                # Create chunks for PDF information to include in vector search
-                for pdf_url, metadata in pdf_metadata.items():
-                    if metadata['title'] and metadata['context']:
-                        pdf_content = f"PDF Document: {metadata['title']}\nContext: {metadata['context']}"
-                        from langchain.schema import Document
-                        pdf_doc = Document(
-                            page_content=pdf_content,
-                            metadata={
-                                'source': url,
-                                'pdf_url': pdf_url,
-                                'is_pdf': True,
-                                'title': metadata['title'],
-                                'is_circular': metadata.get('is_circular', False)
-                            }
-                        )
-                        chunks.append(pdf_doc)
             
             # Create embeddings and vector store
             embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
@@ -223,102 +117,19 @@ def process_websites(urls_list):
 
 # Button to process websites
 if st.session_state.websites and not st.session_state.websites_processed:
-    if st.button("Process Websites and Extract PDFs"):
+    if st.button("Process Websites"):
         process_websites(st.session_state.websites)
-        # Add a simple confirmation if processing was successful
-        if st.session_state.websites_processed:
-            pdf_count = sum(len(links) for links in st.session_state.pdf_links.values())
-            circular_count = sum(1 for metadata in st.session_state.pdf_metadata.values() 
-                               if metadata.get('is_circular', False))
-            st.success(f"Found {pdf_count} PDF files across all websites, including {circular_count} potential circulars/regulations.")
 
 # Function to get relevant sources for a query
 def get_relevant_sources(query, vectorstore, k=3):
     relevant_docs = vectorstore.similarity_search(query, k=k)
     sources = []
-    pdf_sources = []
-    
     for doc in relevant_docs:
         if 'source' in doc.metadata:
             source_url = doc.metadata['source']
-            
-            # Check if this is a PDF reference
-            if doc.metadata.get('is_pdf', False) and 'pdf_url' in doc.metadata:
-                pdf_url = doc.metadata['pdf_url']
-                title = doc.metadata.get('title', 'PDF Document')
-                is_circular = doc.metadata.get('is_circular', False)
-                
-                pdf_sources.append({
-                    'url': pdf_url,
-                    'title': title,
-                    'source_website': source_url,
-                    'is_circular': is_circular
-                })
-            elif source_url not in sources:
+            if source_url not in sources:
                 sources.append(source_url)
-    
-    return sources, pdf_sources
-
-# Improved function to find relevant PDF links for a query
-def get_relevant_pdfs(query, pdf_metadata, max_results=5):
-    query_terms = set(query.lower().split())
-    # Add terms related to circulars/regulations if the query seems to be about regulations
-    regulation_terms = {'circular', 'regulation', 'policy', 'guideline', 'notice', 
-                       'notification', 'directive', 'rule', 'act', 'law'}
-    
-    is_regulation_query = any(term in query_terms for term in regulation_terms)
-    
-    scored_pdfs = []
-    
-    # Score each PDF by relevance to the query
-    for pdf_url, metadata in pdf_metadata.items():
-        score = 0
-        pdf_text = metadata['title'] + " " + metadata['context']
-        pdf_terms = set(pdf_text.lower().split())
-        
-        # Score based on keyword matches
-        matching_terms = query_terms.intersection(pdf_terms)
-        score += len(matching_terms) * 2  # Higher weight for direct matches
-        
-        # Boost score for PDFs that are circulars/regulations if query is about regulations
-        if is_regulation_query and metadata.get('is_circular', False):
-            score += 5
-        
-        # Check for specific keywords in PDF metadata
-        for keyword in metadata.get('keywords', []):
-            if any(term in keyword for term in query_terms):
-                score += 1
-        
-        if score > 0:
-            scored_pdfs.append((score, pdf_url, metadata))
-    
-    # Sort by score (descending) and take top results
-    scored_pdfs.sort(reverse=True)
-    
-    relevant_pdfs = []
-    for _, pdf_url, metadata in scored_pdfs[:max_results]:
-        relevant_pdfs.append({
-            'title': metadata['title'],
-            'url': pdf_url,
-            'website': metadata['source_url'],
-            'is_circular': metadata.get('is_circular', False)
-        })
-    
-    return relevant_pdfs
-
-# Function to prepare the prompt for the LLM with PDF awareness
-def prepare_prompt_with_pdf_context(query, relevant_pdfs):
-    if not relevant_pdfs:
-        return query
-    
-    # Enhance the prompt with PDF context
-    pdf_context = "I found these potentially relevant documents:\n"
-    for i, pdf in enumerate(relevant_pdfs[:3], 1):  # Limit to top 3
-        pdf_type = "circular/regulation" if pdf.get('is_circular') else "document"
-        pdf_context += f"{i}. {pdf['title']} ({pdf_type})\n"
-    
-    enhanced_prompt = f"{pdf_context}\n\nBased on the information above and your knowledge, please answer: {query}"
-    return enhanced_prompt
+    return sources
 
 # Q&A section
 st.header("Ask Questions")
@@ -352,7 +163,7 @@ if groq_api_key and st.session_state.vectorstore is not None:
     # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            st.write(message["content"])
     
     # Chat input
     if prompt := st.chat_input("Ask a question about the websites:"):
@@ -364,34 +175,12 @@ if groq_api_key and st.session_state.vectorstore is not None:
             st.write(prompt)
         
         # Get relevant sources before the chain call
-        sources, pdf_sources = get_relevant_sources(prompt, st.session_state.vectorstore, k=5)
-        
-        # Find relevant PDFs for the query
-        keyword_relevant_pdfs = get_relevant_pdfs(prompt, st.session_state.pdf_metadata)
-        
-        # Combine PDFs from vector search and keyword search (avoiding duplicates)
-        all_pdf_urls = set()
-        relevant_pdfs = []
-        
-        # First add PDFs found through vector search
-        for pdf in pdf_sources:
-            if pdf['url'] not in all_pdf_urls:
-                relevant_pdfs.append(pdf)
-                all_pdf_urls.add(pdf['url'])
-        
-        # Then add PDFs found through keyword search
-        for pdf in keyword_relevant_pdfs:
-            if pdf['url'] not in all_pdf_urls:
-                relevant_pdfs.append(pdf)
-                all_pdf_urls.add(pdf['url'])
-        
-        # Prepare enhanced prompt with PDF context
-        enhanced_prompt = prepare_prompt_with_pdf_context(prompt, relevant_pdfs)
+        relevant_sources = get_relevant_sources(prompt, st.session_state.vectorstore, k=3)
         
         # Get the response from the conversation chain
         with st.spinner("Thinking..."):
             response = conversation_chain.invoke({
-                "question": enhanced_prompt,
+                "question": prompt,
                 "chat_history": st.session_state.chat_history
             })
             
@@ -399,59 +188,45 @@ if groq_api_key and st.session_state.vectorstore is not None:
             source_docs = response.get('source_documents', [])
             
             # Extract source URLs from returned documents
-            sources_from_response = []
+            sources = []
             for doc in source_docs:
                 if 'source' in doc.metadata:
                     source_url = doc.metadata['source']
-                    if source_url not in sources_from_response:
-                        sources_from_response.append(source_url)
+                    if source_url not in sources:
+                        sources.append(source_url)
             
             # If no sources from response, use the pre-fetched relevant sources
-            if not sources_from_response:
-                sources_from_response = sources
+            if not sources:
+                sources = relevant_sources
             
-            # Prepare the answer
+            # Get the answer
             answer = response['answer']
-            
-            # Identify if the query is about circulars/regulations
-            regulation_terms = {'circular', 'regulation', 'policy', 'guideline', 'notice', 
-                               'notification', 'directive', 'rule', 'act', 'law'}
-            query_terms = set(prompt.lower().split())
-            is_regulation_query = any(term in query_terms for term in regulation_terms)
-            
-            # Filter PDFs to prioritize circulars/regulations for regulation queries
-            if is_regulation_query:
-                circular_pdfs = [pdf for pdf in relevant_pdfs if pdf.get('is_circular', False)]
-                if circular_pdfs:
-                    relevant_pdfs = circular_pdfs
-            
-            # Add PDF references to the answer
-            if relevant_pdfs:
-                answer += "\n\n## Relevant Documents\n"
-                for i, pdf in enumerate(relevant_pdfs[:5], 1):  # Limit to top 5
-                    doc_type = "📜 Circular/Regulation" if pdf.get('is_circular') else "📄 Document"
-                    answer += f"{i}. [{pdf['title']}]({pdf['url']}) - {doc_type}\n"
         
         # Display assistant response in chat
         with st.chat_message("assistant"):
-            st.markdown(answer)
+            st.write(answer)
             
             # Display source links
-            if sources_from_response:
-                st.markdown("---")
-                st.markdown("**Website Sources:**")
-                for i, source in enumerate(sources_from_response, 1):
-                    st.markdown(f"{i}. [{source}]({source})")
+            if sources:
+                st.write("---")
+                st.write("**Sources:**")
+                for i, source in enumerate(sources, 1):
+                    st.write(f"{i}. [{source}]({source})")
         
         # Add assistant response to chat history
+        response_with_sources = answer
+        if sources:
+            source_text = "\n\nSources:\n" + "\n".join(sources)
+            response_with_sources += source_text
+            
         st.session_state.messages.append({
             "role": "assistant", 
-            "content": answer
+            "content": response_with_sources
         })
 
 elif not st.session_state.websites:
     st.info("Please add websites to process.")
 elif not st.session_state.websites_processed:
-    st.info("Please process the websites to extract PDF links and enable Q&A.")
+    st.info("Please process the websites to enable Q&A.")
 elif not groq_api_key:
     st.warning("Please enter your Groq API key in the sidebar to enable Q&A functionality.")
