@@ -14,7 +14,11 @@ st.title("Web-based Q&A System")
 
 # Hardcoded websites to process
 websites = {
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "Python Documentation": "https://docs.python.org/3/",
+    "Streamlit Documentation": "https://docs.streamlit.io/",
+    "LangChain Documentation": "https://python.langchain.com/docs/get_started/introduction",
+    "Wikipedia - Artificial Intelligence": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+    "NASA Homepage": "https://www.nasa.gov/"
 }
 
 # API configuration sidebar
