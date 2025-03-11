@@ -14,7 +14,7 @@ import time
 # Predefined URLs to process
 PREDEFINED_URLS = [
     "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
 ]
 
 # Set page title
@@ -51,6 +51,9 @@ if "processed_urls" not in st.session_state:
     
 if "source_documents" not in st.session_state:
     st.session_state.source_documents = {}
+    
+if "initial_load_done" not in st.session_state:
+    st.session_state.initial_load_done = False
 
 # Function to load and process the website in background
 def process_website_background(url):
@@ -95,53 +98,23 @@ def process_website_background(url):
         st.session_state.processed_urls[url] = f"Failed: {str(e)}"
         st.session_state.processing_status = f"Error processing {url}: {str(e)}"
 
-# Display predefined URLs with buttons
-st.header("Process Predefined Websites")
-for url in PREDEFINED_URLS:
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.text(url)
-    with col2:
-        if url in st.session_state.processed_urls and st.session_state.processed_urls[url] == "Completed":
-            st.success("✓")
-        elif url in st.session_state.processed_urls and st.session_state.processed_urls[url] == "Processing...":
-            st.info("⏳")
-        else:
-            if st.button("Process", key=f"btn_{url}"):
-                st.session_state.processed_urls[url] = "Processing..."
-                st.session_state.embedding_model = embedding_model  # Store selected embedding model
-                
-                # Start background processing
-                thread = threading.Thread(target=process_website_background, args=(url,))
-                thread.start()
-                st.info(f"Processing {url} in the background. You can continue using the app.")
-                st.experimental_rerun()  # Force a rerun to update the UI
-
-# Optional: Allow adding custom URLs as well
-st.header("Add Custom Web Content")
-custom_url = st.text_input("Enter additional website URL to analyze:")
-process_custom_button = st.button("Process Custom URL")
-
-# Process custom website if button is clicked
-if process_custom_button and custom_url:
-    if custom_url in st.session_state.processed_urls and st.session_state.processed_urls[custom_url] == "Completed":
-        st.info(f"URL already processed: {custom_url}")
-    else:
-        st.session_state.processed_urls[custom_url] = "Processing..."
-        st.session_state.embedding_model = embedding_model  # Store selected embedding model
-        
-        # Start background processing
-        thread = threading.Thread(target=process_website_background, args=(custom_url,))
-        thread.start()
-        st.info(f"Processing {custom_url} in the background. You can continue using the app.")
+# Automatically start processing all predefined URLs when the app loads
+if not st.session_state.initial_load_done:
+    st.session_state.embedding_model = embedding_model  # Store selected embedding model
+    
+    # Start a background thread for each URL
+    for url in PREDEFINED_URLS:
+        if url not in st.session_state.processed_urls:
+            st.session_state.processed_urls[url] = "Processing..."
+            thread = threading.Thread(target=process_website_background, args=(url,))
+            thread.start()
+    
+    st.session_state.initial_load_done = True
+    st.info("Processing URLs in the background. You can start chatting once processing is complete.")
 
 # Display processing status
-if st.session_state.processing_status:
-    st.info(st.session_state.processing_status)
-
-# Display processed URLs
+st.header("Website Processing Status")
 if st.session_state.processed_urls:
-    st.subheader("Processing Status")
     for url, status in st.session_state.processed_urls.items():
         status_icon = "✅" if status == "Completed" else "⏳" if status == "Processing..." else "❌"
         st.text(f"{status_icon} {url}: {status}")
@@ -234,4 +207,25 @@ elif st.session_state.vectorstore is None and st.session_state.processed_urls:
 elif not groq_api_key and st.session_state.vectorstore is not None:
     st.warning("Please enter your Groq API key in the sidebar.")
 else:
-    st.info("Process the predefined websites to start asking questions.")
+    st.info("Website processing in progress. Chat will be available once processing is complete.")
+
+# Add information about the application
+with st.expander("About this App"):
+    st.markdown("""
+    This Q&A application allows you to:
+    1. Automatically processes predefined websites in the background
+    2. Indexes the content using FAISS vector database
+    3. Ask questions about the website content
+    4. Get AI-powered answers using Groq's language models with source links
+    
+    The application uses:
+    - LangChain for the document processing pipeline
+    - HuggingFace embeddings for vectorization
+    - Groq for generating responses
+    - Streamlit for the user interface
+    
+    To use:
+    1. Enter your Groq API key in the sidebar
+    2. Wait until website processing is complete
+    3. Ask questions in the chat input
+    """)
