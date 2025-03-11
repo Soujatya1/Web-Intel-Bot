@@ -1,6 +1,7 @@
 import streamlit as st
 import os
-from langchain.document_loaders import WebBaseLoader, SeleniumURLLoader
+from langchain.document_loaders import WebBaseLoader
+from langchain.document_loaders.selenium import SeleniumURLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 from langchain.vectorstores import FAISS
@@ -94,11 +95,10 @@ def process_websites(urls_list):
             if selenium_urls:
                 st.write(f"Processing dynamic URLs with Selenium: {', '.join(selenium_urls)}")
                 
-                # Custom settings for Selenium - may need adjustment
+                # Correct parameter for SeleniumURLLoader
                 selenium_loader = SeleniumURLLoader(
                     urls=selenium_urls,
-                    continue_on_failure=True,
-                    wait_for_timeout=10  # Give more time for dynamic content to load
+                    continue_on_failure=True
                 )
                 
                 selenium_documents = selenium_loader.load()
@@ -113,6 +113,10 @@ def process_websites(urls_list):
                             # If no match found, use the first URL as default source
                             doc.metadata['source'] = selenium_urls[0]
                 
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200
+                )
                 selenium_chunks = text_splitter.split_documents(selenium_documents)
                 all_chunks.extend(selenium_chunks)
             
