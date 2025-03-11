@@ -8,14 +8,36 @@ from langchain_groq import ChatGroq
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from urllib.parse import urljoin, urlparse
+import re
 
 # Set page title
-st.title("Web-based Q&A System")
+st.title("Website PDF Extractor & Q&A System")
 
-# Hardcoded websites to process
-websites = {
-    "Circulars": "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "Regulations": "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
-}
+# Hardcoded websites to process - you can modify this list as needed
+WEBSITES = [
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+]
+
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+    
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+    
+if "websites_processed" not in st.session_state:
+    st.session_state.websites_processed = False
+
+if "pdf_links" not in st.session_state:
+    st.session_state.pdf_links = {}
 
 # API configuration sidebar
 with st.sidebar:
@@ -30,27 +52,100 @@ with st.sidebar:
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
     
-# Initialize session state for chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    # PDF extraction settings
+    st.subheader("PDF Extraction Settings")
+    extraction_depth = st.slider("Link Search Depth", 0, 2, 0, 
+                               help="0 = Only search main page, 1 = Follow one level of links, 2 = Follow two levels")
+    filter_keywords = st.text_input("Filter PDFs by Keywords (comma-separated)", 
+                                   help="Only extract PDFs with these keywords in title or URL")
+
+# Display the hardcoded websites
+st.header("Websites to Process")
+for i, website in enumerate(WEBSITES, 1):
+    st.write(f"{i}. {website}")
+
+# Function to extract PDF links from any website
+def extract_pdf_links(url, depth=0, max_depth=0, visited=None, keywords=None):
+    if visited is None:
+        visited = set()
     
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+    if url in visited:
+        return {}
     
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
+    visited.add(url)
     
-if "websites_processed" not in st.session_state:
-    st.session_state.websites_processed = False
+    if keywords:
+        keyword_list = [k.strip().lower() for k in keywords.split(',') if k.strip()]
+    else:
+        keyword_list = []
+    
+    try:
+        st.write(f"Scanning: {url}")
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        pdf_links = {}
+        
+        # Find all links on the page
+        links = soup.find_all('a')
+        for link in links:
+            href = link.get('href')
+            if not href:
+                continue
+                
+            # Make the URL absolute
+            full_url = urljoin(url, href)
+            
+            # Extract PDF links
+            if href.lower().endswith('.pdf'):
+                title = link.get_text().strip()
+                if not title:
+                    # Use the filename as title if no text
+                    title = os.path.basename(href)
+                
+                # Apply keyword filter if specified
+                if keyword_list:
+                    if not any(keyword in title.lower() or keyword in full_url.lower() for keyword in keyword_list):
+                        continue
+                
+                pdf_links[title] = full_url
+            
+            # Recursively follow links if depth allows
+            elif depth < max_depth and full_url not in visited:
+                # Only follow links within the same domain
+                if urlparse(url).netloc == urlparse(full_url).netloc:
+                    sub_links = extract_pdf_links(full_url, depth + 1, max_depth, visited, keywords)
+                    pdf_links.update(sub_links)
+        
+        return pdf_links
+    
+    except Exception as e:
+        st.warning(f"Error scanning {url}: {str(e)}")
+        return {}
 
 # Function to load and process websites
-def process_websites(urls_dict):
+def process_websites(urls_list, max_depth=0, keywords=None):
     with st.spinner("Loading and processing websites... This may take a few minutes."):
         try:
             all_chunks = []
             
-            for name, url in urls_dict.items():
-                st.write(f"Processing {name}...")
+            for url in urls_list:
+                st.write(f"Processing: {url}")
+                
+                # Create a simple name for the website based on domain and path
+                parsed_url = urlparse(url)
+                domain = parsed_url.netloc
+                path_parts = [p for p in parsed_url.path.split('/') if p]
+                if path_parts:
+                    webpage_id = f"{domain}_{path_parts[-1]}"
+                else:
+                    webpage_id = domain
+                
+                # Extract PDF links
+                pdf_links = extract_pdf_links(url, max_depth=max_depth, keywords=keywords)
+                st.session_state.pdf_links[url] = pdf_links
+                st.write(f"Found {len(pdf_links)} PDF links.")
                 
                 # Load the website content
                 loader = WebBaseLoader(url)
@@ -82,13 +177,43 @@ def process_websites(urls_dict):
             st.error(f"Error processing websites: {str(e)}")
             return False
 
-# Process websites if not already processed
+# Button to process websites
 if not st.session_state.websites_processed:
-    st.header("Processing Websites")
-    st.write("The system is retrieving data from the following websites:")
-    for name, url in websites.items():
-        st.write(f"• {name}: {url}")
-    process_websites(websites)
+    if st.button("Process Websites and Extract PDFs"):
+        keywords = filter_keywords if filter_keywords else None
+        process_websites(WEBSITES, max_depth=extraction_depth, keywords=keywords)
+
+# Display extracted PDF links
+if st.session_state.websites_processed and st.session_state.pdf_links:
+    st.header("Extracted PDF Links")
+    
+    total_pdfs = sum(len(pdfs) for pdfs in st.session_state.pdf_links.values())
+    st.write(f"Total PDFs found: {total_pdfs}")
+    
+    # Combine all PDFs into a single dataframe
+    all_pdf_data = []
+    for url, links in st.session_state.pdf_links.items():
+        for title, pdf_url in links.items():
+            all_pdf_data.append({
+                "Title": title,
+                "PDF Link": pdf_url,
+                "Source Website": url
+            })
+    
+    if all_pdf_data:
+        all_pdf_df = pd.DataFrame(all_pdf_data)
+        st.dataframe(all_pdf_df)
+        
+        # Add a download button for all PDF links
+        csv = all_pdf_df.to_csv(index=False)
+        st.download_button(
+            label="Download All PDF Links as CSV",
+            data=csv,
+            file_name="all_pdf_links.csv",
+            mime="text/csv"
+        )
+    else:
+        st.write("No PDF links found.")
 
 # Q&A section
 st.header("Ask Questions")
@@ -168,8 +293,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
             # If no sources from response, use the pre-fetched relevant sources
             if not sources:
                 sources = relevant_sources
-            
-            # Update conversation history - handled automatically by memory
         
         # Display assistant response in chat
         with st.chat_message("assistant"):
@@ -193,7 +316,7 @@ if groq_api_key and st.session_state.vectorstore is not None:
             "content": response_with_sources
         })
 
-elif st.session_state.vectorstore is None:
-    st.info("Processing websites... Please wait.")
+elif not st.session_state.websites_processed:
+    st.info("Please process the websites to extract PDF links and enable Q&A.")
 elif not groq_api_key:
-    st.warning("Please enter your Groq API key in the sidebar.")
+    st.warning("Please enter your Groq API key in the sidebar to enable Q&A functionality.")
