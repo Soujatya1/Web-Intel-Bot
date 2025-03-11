@@ -115,10 +115,11 @@ if groq_api_key and st.session_state.vectorstore is not None:
         temperature=0.5,
     )
     
-    # Create a conversation memory
+    # Create a conversation memory with explicit output_key
     memory = ConversationBufferMemory(
         memory_key="chat_history",
-        return_messages=True
+        return_messages=True,
+        output_key="answer"  # Explicitly set which output to store
     )
     
     # Create the conversation chain
@@ -168,8 +169,7 @@ if groq_api_key and st.session_state.vectorstore is not None:
             if not sources:
                 sources = relevant_sources
             
-            # Update conversation history
-            st.session_state.chat_history.append((prompt, response['answer']))
+            # Update conversation history - handled automatically by memory
         
         # Display assistant response in chat
         with st.chat_message("assistant"):
@@ -183,9 +183,14 @@ if groq_api_key and st.session_state.vectorstore is not None:
                     st.write(f"{i}. [{source}]({source})")
         
         # Add assistant response to chat history
+        response_with_sources = response['answer']
+        if sources:
+            source_text = "\n\nRelevant Sources:\n" + "\n".join(sources)
+            response_with_sources += source_text
+            
         st.session_state.messages.append({
             "role": "assistant", 
-            "content": response['answer'] + "\n\nRelevant Sources:\n" + "\n".join(sources)
+            "content": response_with_sources
         })
 
 elif st.session_state.vectorstore is None:
