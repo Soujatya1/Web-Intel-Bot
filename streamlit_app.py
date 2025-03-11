@@ -14,6 +14,11 @@ from urllib.parse import urlparse
 
 st.title("Website Q&A System")
 
+# Hardcoded list of websites to process
+WEBSITES = [
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+]
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
     
@@ -25,9 +30,6 @@ if "vectorstore" not in st.session_state:
     
 if "websites_processed" not in st.session_state:
     st.session_state.websites_processed = False
-
-if "websites" not in st.session_state:
-    st.session_state.websites = []
 
 with st.sidebar:
     st.header("Configuration")
@@ -41,25 +43,10 @@ with st.sidebar:
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
 
-st.header("Enter Websites to Process")
-website_input = st.text_area("Enter website URLs (one per line):")
-add_website_button = st.button("Add Websites")
-
-if add_website_button and website_input:
-    new_websites = [url.strip() for url in website_input.split('\n') if url.strip()]
-    st.session_state.websites.extend(new_websites)
-    st.success(f"Added {len(new_websites)} websites")
-
-if st.session_state.websites:
-    st.header("Websites to Process")
-    for i, website in enumerate(st.session_state.websites, 1):
-        st.write(f"{i}. {website}")
-        
-    if st.button("Clear Websites List"):
-        st.session_state.websites = []
-        st.session_state.websites_processed = False
-        st.session_state.vectorstore = None
-        st.experimental_rerun()
+# Display the hardcoded websites
+st.header("Websites to Process")
+for i, website in enumerate(WEBSITES, 1):
+    st.write(f"{i}. {website}")
 
 def process_websites(urls_list):
     with st.spinner("Loading and processing websites... This may take a few minutes."):
@@ -104,9 +91,9 @@ def process_websites(urls_list):
             st.error(f"Error processing websites: {str(e)}")
             return False
 
-if st.session_state.websites and not st.session_state.websites_processed:
+if not st.session_state.websites_processed:
     if st.button("Process Websites"):
-        process_websites(st.session_state.websites)
+        process_websites(WEBSITES)
 
 def get_relevant_sources(query, vectorstore, k=3):
     relevant_docs = vectorstore.similarity_search(query, k=k)
@@ -192,8 +179,6 @@ if groq_api_key and st.session_state.vectorstore is not None:
             "content": response_with_sources
         })
 
-elif not st.session_state.websites:
-    st.info("Please add websites to process.")
 elif not st.session_state.websites_processed:
     st.info("Please process the websites to enable Q&A.")
 elif not groq_api_key:
