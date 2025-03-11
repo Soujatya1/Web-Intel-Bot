@@ -173,41 +173,10 @@ def process_websites(urls_list):
 if st.session_state.websites and not st.session_state.websites_processed:
     if st.button("Process Websites and Extract PDFs"):
         process_websites(st.session_state.websites)
-
-# Display extracted PDF links
-if st.session_state.websites_processed and st.session_state.pdf_links:
-    st.header("Extracted PDF Links")
-    
-    total_pdfs = sum(len(pdfs) for pdfs in st.session_state.pdf_links.values())
-    st.write(f"Total PDFs found: {total_pdfs}")
-    
-    # Combine all PDFs into a single dataframe
-    all_pdf_data = []
-    for url, links in st.session_state.pdf_links.items():
-        for title, pdf_url in links.items():
-            all_pdf_data.append({
-                "Title": title,
-                "PDF Link": pdf_url,
-                "Source Website": url
-            })
-    
-    if all_pdf_data:
-        all_pdf_df = pd.DataFrame(all_pdf_data)
-        st.dataframe(all_pdf_df)
-        
-        # Add a download button for all PDF links
-        csv = all_pdf_df.to_csv(index=False)
-        st.download_button(
-            label="Download All PDF Links as CSV",
-            data=csv,
-            file_name="all_pdf_links.csv",
-            mime="text/csv"
-        )
-    else:
-        st.write("No PDF links found.")
-
-# Q&A section
-st.header("Ask Questions")
+        # Add a simple confirmation if processing was successful
+        if st.session_state.websites_processed:
+            pdf_count = sum(len(links) for links in st.session_state.pdf_links.values())
+            st.success(f"Found {pdf_count} PDF files across all websites. They will be included in Q&A responses.")
 
 # Function to get relevant sources for a query
 def get_relevant_sources(query, vectorstore, k=3):
@@ -219,6 +188,40 @@ def get_relevant_sources(query, vectorstore, k=3):
             if source_url not in sources:
                 sources.append(source_url)
     return sources
+
+# Function to find relevant PDF links for a query
+def get_relevant_pdfs(query, pdf_links, max_results=3):
+    query_terms = set(query.lower().split())
+    relevant_pdfs = []
+    
+    # Flatten the PDF links from all websites
+    all_pdfs = {}
+    for website, links in pdf_links.items():
+        for title, url in links.items():
+            all_pdfs[title] = {'url': url, 'website': website}
+    
+    # Score each PDF by how many query terms appear in its title
+    scored_pdfs = []
+    for title, pdf_info in all_pdfs.items():
+        title_terms = set(title.lower().split())
+        matching_terms = query_terms.intersection(title_terms)
+        if matching_terms:
+            score = len(matching_terms)
+            scored_pdfs.append((score, title, pdf_info))
+    
+    # Sort by score (descending) and take top results
+    scored_pdfs.sort(reverse=True)
+    for _, title, pdf_info in scored_pdfs[:max_results]:
+        relevant_pdfs.append({
+            'title': title,
+            'url': pdf_info['url'],
+            'website': pdf_info['website']
+        })
+    
+    return relevant_pdfs
+
+# Q&A section
+st.header("Ask Questions")
 
 # Create the LLM-based QA chain when API key is provided
 if groq_api_key and st.session_state.vectorstore is not None:
@@ -263,6 +266,9 @@ if groq_api_key and st.session_state.vectorstore is not None:
         # Get relevant sources before the chain call
         relevant_sources = get_relevant_sources(prompt, st.session_state.vectorstore, k=3)
         
+        # Find relevant PDFs for the query
+        relevant_pdfs = get_relevant_pdfs(prompt, st.session_state.pdf_links)
+        
         # Get the response from the conversation chain
         with st.spinner("Thinking..."):
             response = conversation_chain.invoke({
@@ -284,10 +290,18 @@ if groq_api_key and st.session_state.vectorstore is not None:
             # If no sources from response, use the pre-fetched relevant sources
             if not sources:
                 sources = relevant_sources
+            
+            # Enhance the answer with PDF references if relevant
+            answer = response['answer']
+            
+            if relevant_pdfs:
+                answer += "\n\nFor more detailed information, you might want to check these relevant documents:\n"
+                for i, pdf in enumerate(relevant_pdfs, 1):
+                    answer += f"\n{i}. [{pdf['title']}]({pdf['url']})"
         
         # Display assistant response in chat
         with st.chat_message("assistant"):
-            st.write(response['answer'])
+            st.write(answer)
             
             # Display source links
             if sources:
@@ -297,7 +311,7 @@ if groq_api_key and st.session_state.vectorstore is not None:
                     st.write(f"{i}. [{source}]({source})")
         
         # Add assistant response to chat history
-        response_with_sources = response['answer']
+        response_with_sources = answer
         if sources:
             source_text = "\n\nRelevant Sources:\n" + "\n".join(sources)
             response_with_sources += source_text
