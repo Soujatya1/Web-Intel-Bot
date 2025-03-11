@@ -95,7 +95,7 @@ def process_websites(urls_list):
             if selenium_urls:
                 st.write(f"Processing dynamic URLs with Selenium: {', '.join(selenium_urls)}")
                 
-                # Correct parameter for SeleniumURLLoader
+                # Correct import used: langchain_community.document_loaders.SeleniumURLLoader
                 selenium_loader = SeleniumURLLoader(
                     urls=selenium_urls,
                     continue_on_failure=True
