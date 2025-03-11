@@ -17,12 +17,6 @@ import re
 # Set page title
 st.title("Website PDF Extractor & Q&A System")
 
-# Hardcoded websites to process - you can modify this list as needed
-WEBSITES = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
-]
-
 # Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -39,6 +33,9 @@ if "websites_processed" not in st.session_state:
 if "pdf_links" not in st.session_state:
     st.session_state.pdf_links = {}
 
+if "websites" not in st.session_state:
+    st.session_state.websites = []
+
 # API configuration sidebar
 with st.sidebar:
     st.header("Configuration")
@@ -51,21 +48,33 @@ with st.sidebar:
         "Select Embedding Model:",
         ["all-MiniLM-L6-v2", "all-mpnet-base-v2"]
     )
-    
-    # PDF extraction settings
-    st.subheader("PDF Extraction Settings")
-    extraction_depth = st.slider("Link Search Depth", 0, 2, 0, 
-                               help="0 = Only search main page, 1 = Follow one level of links, 2 = Follow two levels")
-    filter_keywords = st.text_input("Filter PDFs by Keywords (comma-separated)", 
-                                   help="Only extract PDFs with these keywords in title or URL")
 
-# Display the hardcoded websites
-st.header("Websites to Process")
-for i, website in enumerate(WEBSITES, 1):
-    st.write(f"{i}. {website}")
+# User input for websites
+st.header("Enter Websites to Process")
+website_input = st.text_area("Enter website URLs (one per line):")
+add_website_button = st.button("Add Websites")
+
+if add_website_button and website_input:
+    new_websites = [url.strip() for url in website_input.split('\n') if url.strip()]
+    st.session_state.websites.extend(new_websites)
+    st.success(f"Added {len(new_websites)} websites")
+
+# Display added websites
+if st.session_state.websites:
+    st.header("Websites to Process")
+    for i, website in enumerate(st.session_state.websites, 1):
+        st.write(f"{i}. {website}")
+        
+    # Option to clear the list
+    if st.button("Clear Websites List"):
+        st.session_state.websites = []
+        st.session_state.websites_processed = False
+        st.session_state.pdf_links = {}
+        st.session_state.vectorstore = None
+        st.experimental_rerun()
 
 # Function to extract PDF links from any website
-def extract_pdf_links(url, depth=0, max_depth=0, visited=None, keywords=None):
+def extract_pdf_links(url, visited=None):
     if visited is None:
         visited = set()
     
@@ -73,11 +82,6 @@ def extract_pdf_links(url, depth=0, max_depth=0, visited=None, keywords=None):
         return {}
     
     visited.add(url)
-    
-    if keywords:
-        keyword_list = [k.strip().lower() for k in keywords.split(',') if k.strip()]
-    else:
-        keyword_list = []
     
     try:
         st.write(f"Scanning: {url}")
@@ -104,19 +108,7 @@ def extract_pdf_links(url, depth=0, max_depth=0, visited=None, keywords=None):
                     # Use the filename as title if no text
                     title = os.path.basename(href)
                 
-                # Apply keyword filter if specified
-                if keyword_list:
-                    if not any(keyword in title.lower() or keyword in full_url.lower() for keyword in keyword_list):
-                        continue
-                
                 pdf_links[title] = full_url
-            
-            # Recursively follow links if depth allows
-            elif depth < max_depth and full_url not in visited:
-                # Only follow links within the same domain
-                if urlparse(url).netloc == urlparse(full_url).netloc:
-                    sub_links = extract_pdf_links(full_url, depth + 1, max_depth, visited, keywords)
-                    pdf_links.update(sub_links)
         
         return pdf_links
     
@@ -125,7 +117,7 @@ def extract_pdf_links(url, depth=0, max_depth=0, visited=None, keywords=None):
         return {}
 
 # Function to load and process websites
-def process_websites(urls_list, max_depth=0, keywords=None):
+def process_websites(urls_list):
     with st.spinner("Loading and processing websites... This may take a few minutes."):
         try:
             all_chunks = []
@@ -143,7 +135,7 @@ def process_websites(urls_list, max_depth=0, keywords=None):
                     webpage_id = domain
                 
                 # Extract PDF links
-                pdf_links = extract_pdf_links(url, max_depth=max_depth, keywords=keywords)
+                pdf_links = extract_pdf_links(url)
                 st.session_state.pdf_links[url] = pdf_links
                 st.write(f"Found {len(pdf_links)} PDF links.")
                 
@@ -178,10 +170,9 @@ def process_websites(urls_list, max_depth=0, keywords=None):
             return False
 
 # Button to process websites
-if not st.session_state.websites_processed:
+if st.session_state.websites and not st.session_state.websites_processed:
     if st.button("Process Websites and Extract PDFs"):
-        keywords = filter_keywords if filter_keywords else None
-        process_websites(WEBSITES, max_depth=extraction_depth, keywords=keywords)
+        process_websites(st.session_state.websites)
 
 # Display extracted PDF links
 if st.session_state.websites_processed and st.session_state.pdf_links:
@@ -316,6 +307,8 @@ if groq_api_key and st.session_state.vectorstore is not None:
             "content": response_with_sources
         })
 
+elif not st.session_state.websites:
+    st.info("Please add websites to process.")
 elif not st.session_state.websites_processed:
     st.info("Please process the websites to extract PDF links and enable Q&A.")
 elif not groq_api_key:
