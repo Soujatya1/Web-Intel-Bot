@@ -15,7 +15,8 @@ from urllib.parse import urlparse
 st.title("Website Q&A System")
 
 WEBSITES = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html"
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html", "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation.html",
+    "https://egazette.gov.in/(S(jjko5lh5lpdta4yyxrdk4lfu))/Default.aspx"
 ]
 
 if "messages" not in st.session_state:
