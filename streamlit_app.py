@@ -44,7 +44,7 @@ class SentenceTransformerEmbeddings(Embeddings):
 
 # Functions for web scraping and content extraction
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
-    """Fetch content from a website and extract text and PDF links."""
+    """Fetch content from a website and extract text, tables, and PDF links."""
     
     # Use cached version if available
     cache_file = os.path.join(CACHE_DIR, urllib.parse.quote_plus(url))
@@ -68,21 +68,152 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     # Parse the HTML content
     soup = BeautifulSoup(content, 'html.parser')
     
-    # Extract all text
+    # Extract text with better structure preservation
     for script in soup(["script", "style"]):
         script.extract()
+    
+    # Extract table data specifically (for structured data like acts)
+    table_data = extract_table_data(soup, url)
+    
+    # Extract general text
     text = soup.get_text(separator="\n")
     text = re.sub(r'\n+', '\n', text)
     text = re.sub(r'\s+', ' ', text)
     
-    # Extract PDF links
+    # Combine general text with structured table data
+    combined_text = text + "\n\n" + table_data
+    
+    # Extract PDF links with better metadata
+    pdf_links = extract_pdf_links(soup, url)
+    
+    return combined_text, pdf_links
+
+def extract_table_data(soup, base_url):
+    """Extract structured data from tables with special handling for IRDAI acts table."""
+    table_data = ""
+    
+    # Look for tables in the document
+    tables = soup.find_all('table')
+    
+    for table in tables:
+        # Check if this looks like the Acts table (has headers like "Archive/Non Archive", "Short Description", etc.)
+        headers = [th.get_text().strip() for th in table.find_all('th')]
+        
+        # If this appears to be the Acts table
+        if any(header in " ".join(headers) for header in ["Archive", "Description", "Last Updated", "Documents"]):
+            table_data += "IRDAI Acts Information:\n"
+            
+            # Process each row
+            for row in table.find_all('tr')[1:]:  # Skip header row
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 4:  # Ensure we have enough cells
+                    # Extract data with position awareness
+                    archive_status = cells[0].get_text().strip()
+                    description = cells[1].get_text().strip()
+                    last_updated = cells[2].get_text().strip()
+                    
+                    # Get document links
+                    doc_cell = cells[-1]  # Usually the last cell
+                    pdf_links = []
+                    for link in doc_cell.find_all('a'):
+                        if link.has_attr('href') and link['href'].lower().endswith('.pdf'):
+                            pdf_url = link['href']
+                            if not pdf_url.startswith(('http://', 'https://')):
+                                pdf_url = urllib.parse.urljoin(base_url, pdf_url)
+                            
+                            # Try to extract file name and size
+                            file_info = link.get_text().strip()
+                            pdf_links.append(f"{file_info} ({pdf_url})")
+                    
+                    # Format as structured text
+                    row_data = f"Act: {description}\n"
+                    row_data += f"Status: {archive_status}\n"
+                    row_data += f"Last Updated: {last_updated}\n"
+                    
+                    if pdf_links:
+                        row_data += "Documents: " + ", ".join(pdf_links) + "\n"
+                    
+                    table_data += row_data + "\n"
+            
+            # Add special sections to help with retrieval
+            table_data += "\nLatest Acts Information:\n"
+            
+            # Find the most recent date
+            latest_dates = []
+            for row in table.find_all('tr')[1:]:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 3:
+                    date_text = cells[2].get_text().strip()
+                    if re.search(r'\d{2}-\d{2}-\d{4}', date_text):
+                        latest_dates.append((date_text, cells[1].get_text().strip()))
+            
+            # Sort by date (most recent first) and add the information
+            if latest_dates:
+                latest_dates.sort(reverse=True)
+                latest_date, latest_act = latest_dates[0]
+                table_data += f"The latest updated Act under IRDAI is {latest_act} with the last updated date as {latest_date}\n"
+    
+    return table_data
+
+def extract_pdf_links(soup, base_url):
+    """Extract PDF links with improved metadata extraction."""
     pdf_links = []
+    
+    # First pass: look for PDF links in tables with better metadata
+    tables = soup.find_all('table')
+    for table in tables:
+        rows = table.find_all('tr')
+        for row in rows:
+            cells = row.find_all(['td', 'th'])
+            
+            # Skip if not enough cells
+            if len(cells) < 3:
+                continue
+                
+            # Try to extract metadata from the row
+            try:
+                description = cells[1].get_text().strip() if len(cells) > 1 else ""
+                last_updated = cells[2].get_text().strip() if len(cells) > 2 else ""
+                
+                # Look for PDF links in the last cell (documents column)
+                doc_cell = cells[-1]
+                for link in doc_cell.find_all('a', href=True):
+                    href = link['href']
+                    if href.lower().endswith('.pdf'):
+                        # Make relative URLs absolute
+                        if not href.startswith(('http://', 'https://')):
+                            href = urllib.parse.urljoin(base_url, href)
+                        
+                        # Get link text and file size if available
+                        link_text = link.get_text().strip()
+                        
+                        # Create a rich context including the description and update date
+                        context = f"Act: {description}, Last Updated: {last_updated}"
+                        
+                        pdf_links.append({
+                            'url': href,
+                            'text': link_text or description,
+                            'context': context,
+                            'metadata': {
+                                'description': description,
+                                'last_updated': last_updated
+                            }
+                        })
+            except Exception as e:
+                # If error parsing the row, continue to the next
+                continue
+    
+    # Second pass: general PDF links (in case we missed any)
     for link in soup.find_all('a', href=True):
         href = link['href']
         if href.lower().endswith('.pdf'):
+            # Skip if we already found this URL in the table
+            if any(pdf['url'] == href for pdf in pdf_links):
+                continue
+                
             # Make relative URLs absolute
             if not href.startswith(('http://', 'https://')):
-                href = urllib.parse.urljoin(url, href)
+                href = urllib.parse.urljoin(base_url, href)
             
             # Get text around the link
             surrounding_text = link.get_text() or "PDF Document"
@@ -94,10 +225,11 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
             pdf_links.append({
                 'url': href,
                 'text': surrounding_text,
-                'context': parent_text[:100]
+                'context': parent_text[:100],
+                'metadata': {}
             })
     
-    return text, pdf_links
+    return pdf_links
 
 def initialize_rag_system():
     """Initialize the RAG system by scraping websites and creating vector store."""
@@ -159,7 +291,12 @@ def initialize_llm():
     )
     
     template = """
-    Answer the question based on the provided context. If the information is not available in the context, say so clearly.
+    You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
+    If the information is not available in the context, say so clearly.
+    
+    When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
+    Pay special attention to the "Last Updated" dates and present them in your answer.
+    
     Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
     
     Context:
@@ -194,7 +331,16 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     model = SentenceTransformer("all-MiniLM-L6-v2")
     query_embedding = model.encode(query)
     
-    pdf_texts = [f"{pdf['text']} {pdf['context']}" for pdf in pdf_links]
+    # Include metadata in the context for better matching
+    pdf_texts = []
+    for pdf in pdf_links:
+        context_text = f"{pdf['text']} {pdf['context']}"
+        # Add metadata if available
+        if 'metadata' in pdf and pdf['metadata']:
+            for key, value in pdf['metadata'].items():
+                context_text += f" {key}: {value}"
+        pdf_texts.append(context_text)
+    
     pdf_embeddings = model.encode(pdf_texts)
     
     # Set up FAISS for quick similarity search
@@ -266,8 +412,19 @@ if 'initialized' in st.session_state and st.session_state.initialized:
             if relevant_pdfs:
                 st.subheader("Relevant PDF Documents")
                 for pdf in relevant_pdfs:
+                    # Display with metadata when available
+                    metadata_text = ""
+                    if 'metadata' in pdf and pdf['metadata']:
+                        for key, value in pdf['metadata'].items():
+                            if value:  # Only show non-empty values
+                                metadata_text += f"{key}: {value}, "
+                        metadata_text = metadata_text.rstrip(", ")
+                    
                     st.markdown(f"[{pdf['text']}]({pdf['url']})")
-                    st.caption(f"Context: {pdf['context']}")
+                    if metadata_text:
+                        st.caption(f"{metadata_text}")
+                    else:
+                        st.caption(f"Context: {pdf['context']}")
             else:
                 st.info("No relevant PDF documents found.")
 else:
