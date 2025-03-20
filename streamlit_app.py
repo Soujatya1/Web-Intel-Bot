@@ -22,26 +22,7 @@ st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
 # Define the list of websites to query
 WEBSITES = [
-    "https://python.org",
-    "https://docs.python.org",
-    "https://streamlit.io",
-    "https://langchain.com",
-    "https://docs.groq.com",
-    "https://github.com",
-    "https://huggingface.co",
-    "https://pytorch.org",
-    "https://tensorflow.org",
-    "https://keras.io",
-    "https://scikit-learn.org",
-    "https://pandas.pydata.org",
-    "https://numpy.org",
-    "https://matplotlib.org",
-    "https://scipy.org",
-    "https://fastapi.tiangolo.com",
-    "https://flask.palletsprojects.com",
-    "https://django-project.com",
-    "https://kaggle.com",
-    "https://paperswithcode.com"
+    "https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"
 ]
 
 # Define the cache directory
