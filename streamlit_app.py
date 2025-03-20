@@ -22,7 +22,7 @@ st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
 # Define the list of websites to query
 WEBSITES = [
-    "https://irdai.gov.in/", "https://egazette.gov.in/", "https://enforcementdirectorate.gov.in/pmla", "https://uidai.gov.in/"
+    "https://irdai.gov.in/acts"
 ]
 
 # Define the cache directory
