@@ -426,7 +426,7 @@ if 'initialized' in st.session_state and st.session_state.initialized:
                     else:
                         st.caption(f"Context: {pdf['context']}")
             else:
-                st.info("No relevant PDF documents found.")
+                st.info(" ")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
