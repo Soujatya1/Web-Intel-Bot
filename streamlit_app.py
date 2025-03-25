@@ -272,7 +272,7 @@ def initialize_rag_system():
     # Store in session state
     st.session_state.vector_store = vector_store
     st.session_state.pdf_links = all_pdf_links
-    st.session_state.status = "RAG system initialized!"
+    st.session_state.status = "System initialized!"
     st.session_state.initialized = True
 
 # Initialize Groq LLM with API key
