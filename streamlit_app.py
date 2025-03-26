@@ -22,7 +22,8 @@ st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
 # Define the list of websites to query
 WEBSITES = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation"
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules"
 ]
 
 # Define the cache directory
