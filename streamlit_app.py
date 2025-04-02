@@ -19,9 +19,36 @@ from langchain.chains import RetrievalQA
 
 st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
-WEBSITES = [
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
-    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules"
+WEBSITES = ["https://irdai.gov.in/rules",
+            "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+            "https://irdai.gov.in/updated-regulations",
+            "https://irdai.gov.in/notifications",
+            "https://irdai.gov.in/circulars",
+            "https://irdai.gov.in/orders1",
+            "https://irdai.gov.in/exposure-drafts",
+            "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+            "https://irdai.gov.in/c/portal/layout?p_l_id=1018&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterDepartment=ALL&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterFromDate=&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterToDate=&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterSearchKeyword=&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterEntities=ALL&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterClassification=RTI&_com_irdai_document_media_IRDAIDocumentMediaPortlet_filterTag=ALL&_com_irdai_document_media_IRDAIDocumentMediaPortlet_archiveOn=false&p_p_id=com_irdai_document_media_IRDAIDocumentMediaPortlet&p_p_lifecycle=0",
+            "https://irdai.gov.in/cic-orders",
+            "https://irdai.gov.in/rules2",
+            "https://irdai.gov.in/antimoney-laundering",
+            "https://irdai.gov.in/other-communication",
+            "https://irdai.gov.in/directory-of-employees",
+            "https://irdai.gov.in/warnings-and-penalties",
+            "https://uidai.gov.in/en/",
+            "https://uidai.gov.in/en/about-uidai/legal-framework.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+            "https://enforcementdirectorate.gov.in/pmla",
+            "https://enforcementdirectorate.gov.in/fema",
+            "https://enforcementdirectorate.gov.in/bns",
+            "https://enforcementdirectorate.gov.in/bnss",
+            "https://enforcementdirectorate.gov.in/bsa"
+            
 ]
 
 CACHE_DIR = ".web_cache"
