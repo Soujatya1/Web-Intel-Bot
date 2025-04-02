@@ -208,18 +208,17 @@ def initialize_rag_system():
             
             # Create documents with rich metadata
             chunks = text_splitter.split_text(content)
-            for i, chunk in enumerate(chunks):
-                all_docs.append(Document(
-                    page_content=chunk,
-                    metadata={
+            for chunk_idx, chunk in enumerate(chunks):
+                        all_docs.append(Document(
+                        page_content=chunk,
+                        metadata={
                         **source_metadata,
-                        "chunk_id": i,
+                        "chunk_id": chunk_idx,
                         "total_chunks": len(chunks)
                     }
                 ))
-            all_pdf_links.extend(pdf_links)
         
-        progress_bar.progress((i + 1) / len(WEBSITES))
+        progress_bar.progress(min(1.0, max(0.0, (i + 1) / len(WEBSITES))))
     
     st.session_state.status = "Creating embeddings..."
     embeddings = SentenceTransformerEmbeddings()
