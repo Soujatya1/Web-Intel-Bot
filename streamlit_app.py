@@ -7,7 +7,7 @@ import numpy as np
 import tempfile
 import urllib.parse
 from bs4 import BeautifulSoup
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -16,13 +16,11 @@ from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor
 
 st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
-# Same website list as before
-WEBSITES = ["https://irdai.gov.in/rules",
+WEBSITES = [
+    	    "https://irdai.gov.in/rules",
             "https://irdai.gov.in/consolidated-gazette-notified-regulations",
             "https://irdai.gov.in/updated-regulations",
             "https://irdai.gov.in/notifications",
@@ -55,7 +53,7 @@ CACHE_DIR = ".web_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 class SentenceTransformerEmbeddings(Embeddings):
-    def __init__(self, model_name="all-mpnet-base-v2"):  # Using a stronger embedding model
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
         self.model = SentenceTransformer(model_name)
         
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -67,7 +65,7 @@ class SentenceTransformerEmbeddings(Embeddings):
         return embedding.tolist()
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
-    """Fetch content from a website with improved extraction."""
+    """Fetch content from a website and extract text, tables, and PDF links."""
     
     cache_file = os.path.join(CACHE_DIR, urllib.parse.quote_plus(url))
     if os.path.exists(cache_file):
@@ -89,64 +87,33 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
     soup = BeautifulSoup(content, 'html.parser')
     
-    # Remove non-content elements
-    for element in soup(['script', 'style', 'nav', 'footer', 'header']):
-        element.extract()
-    
-    # Extract main content areas more intelligently
-    main_content = ""
-    main_elements = soup.select('main, article, .content, #content, .main, #main')
-    if main_elements:
-        for element in main_elements:
-            main_content += element.get_text(separator="\n") + "\n\n"
-    else:
-        # Fallback to body content
-        main_content = soup.body.get_text(separator="\n") if soup.body else ""
+    for script in soup(["script", "style"]):
+        script.extract()
     
     table_data = extract_table_data(soup, url)
     
-    # Preserve paragraph structure better
-    paragraphs = re.split(r'\n\s*\n', main_content)
-    cleaned_paragraphs = [re.sub(r'\s+', ' ', p.strip()) for p in paragraphs if p.strip()]
-    text = "\n\n".join(cleaned_paragraphs)
+    text = soup.get_text(separator="\n")
+    text = re.sub(r'\n+', '\n', text)
+    text = re.sub(r'\s+', ' ', text)
     
-    # Add source URL as context
-    combined_text = f"Source: {url}\n\n{text}\n\n{table_data}"
+    combined_text = text + "\n\n" + table_data
     
     pdf_links = extract_pdf_links(soup, url)
     
     return combined_text, pdf_links
 
 def extract_table_data(soup, base_url):
-    """Extract tabular data with improved structure preservation."""
     table_data = ""
     
     tables = soup.find_all('table')
     
-    for i, table in enumerate(tables):
-        # Add table identifier to help maintain context
-        table_data += f"\nTable {i+1} from {base_url}:\n"
-        
-        # Extract headers
+    for table in tables:
         headers = [th.get_text().strip() for th in table.find_all('th')]
-        if headers:
-            table_data += " | ".join(headers) + "\n"
-            table_data += "-" * (sum(len(h) for h in headers) + 3 * (len(headers) - 1)) + "\n"
         
-        # Extract rows with better formatting
-        for row in table.find_all('tr')[1:] if headers else table.find_all('tr'):
-            cells = [cell.get_text().strip() for cell in row.find_all(['td', 'th'])]
-            if cells:
-                table_data += " | ".join(cells) + "\n"
-        
-        table_data += "\n"
-        
-        # Handle IRDAI specific tables (keeping your logic here)
         if any(header in " ".join(headers) for header in ["Archive", "Description", "Last Updated", "Documents"]):
             table_data += "IRDAI Acts Information:\n"
             
             for row in table.find_all('tr')[1:]:
-                # Your existing IRDAI table processing...
                 cells = row.find_all(['td', 'th'])
                 if len(cells) >= 4:
                     archive_status = cells[0].get_text().strip()
@@ -173,7 +140,6 @@ def extract_table_data(soup, base_url):
                     
                     table_data += row_data + "\n"
             
-            # Find latest acts (keeping your logic)
             table_data += "\nLatest Acts Information:\n"
             
             latest_dates = []
@@ -191,18 +157,72 @@ def extract_table_data(soup, base_url):
     
     return table_data
 
-# extract_pdf_links function remains mostly the same
 def extract_pdf_links(soup, base_url):
     """Extract PDF links with improved metadata extraction."""
-    # Same implementation as your original function
     pdf_links = []
     
-    # Your existing PDF extraction code...
+    tables = soup.find_all('table')
+    for table in tables:
+        rows = table.find_all('tr')
+        for row in rows:
+            cells = row.find_all(['td', 'th'])
+            
+            if len(cells) < 3:
+                continue
+                
+            try:
+                description = cells[1].get_text().strip() if len(cells) > 1 else ""
+                last_updated = cells[2].get_text().strip() if len(cells) > 2 else ""
+                
+                doc_cell = cells[-1]
+                for link in doc_cell.find_all('a', href=True):
+                    href = link['href']
+                    if href.lower().endswith('.pdf'):
+                        if not href.startswith(('http://', 'https://')):
+                            href = urllib.parse.urljoin(base_url, href)
+                        
+                        link_text = link.get_text().strip()
+                        
+                        context = f"Act: {description}, Last Updated: {last_updated}"
+                        
+                        pdf_links.append({
+                            'url': href,
+                            'text': link_text or description,
+                            'context': context,
+                            'metadata': {
+                                'description': description,
+                                'last_updated': last_updated
+                            }
+                        })
+            except Exception as e:
+                continue
+    
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.lower().endswith('.pdf'):
+            if any(pdf['url'] == href for pdf in pdf_links):
+                continue
+                
+            if not href.startswith(('http://', 'https://')):
+                href = urllib.parse.urljoin(base_url, href)
+            
+            surrounding_text = link.get_text() or "PDF Document"
+            parent_text = ""
+            parent = link.parent
+            if parent:
+                parent_text = parent.get_text() or ""
+            
+            pdf_links.append({
+                'url': href,
+                'text': surrounding_text,
+                'context': parent_text[:100],
+                'metadata': {}
+            })
     
     return pdf_links
 
 def initialize_rag_system():
-    """Initialize the RAG system with improved document processing."""
+    """Initialize the RAG system by scraping websites and creating vector store."""
     st.session_state.status = "Initializing RAG system..."
     
     all_docs = []
@@ -213,36 +233,21 @@ def initialize_rag_system():
         st.session_state.status = f"Processing {website}..."
         content, pdf_links = fetch_website_content(website)
         
-        # Using a better chunking strategy with larger chunks and more overlap
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,  # Larger chunks for better context
-            chunk_overlap=200,  # More overlap to preserve context across chunks
-            separators=["\n\n", "\n", ". ", " ", ""],  # Better splitting at natural boundaries
-            keep_separator=True
+            chunk_size=500,
+            chunk_overlap=50
         )
         
         if content and not content.startswith("Error"):
-            # Add the source URL and publish date as metadata for better context
-            source_metadata = {"source": website, "domain": urllib.parse.urlparse(website).netloc}
-            
-            # Extract and add date information if available
-            date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', content[:1000])
-            if date_match:
-                source_metadata["date"] = date_match.group(1)
-            
-            # Create documents with rich metadata
             chunks = text_splitter.split_text(content)
-            for chunk_idx, chunk in enumerate(chunks):
-                        all_docs.append(Document(
-                        page_content=chunk,
-                        metadata={
-                        **source_metadata,
-                        "chunk_id": chunk_idx,
-                        "total_chunks": len(chunks)
-                    }
+            for chunk in chunks:
+                all_docs.append(Document(
+                    page_content=chunk,
+                    metadata={"source": website}
                 ))
+            all_pdf_links.extend(pdf_links)
         
-        progress_bar.progress(min(1.0, max(0.0, (i + 1) / len(WEBSITES))))
+        progress_bar.progress((i + 1) / len(WEBSITES))
     
     st.session_state.status = "Creating embeddings..."
     embeddings = SentenceTransformerEmbeddings()
@@ -256,46 +261,27 @@ def initialize_rag_system():
     st.session_state.initialized = True
 
 def initialize_llm():
-    """Initialize the language model with improved retrieval."""
     groq_api_key = st.session_state.groq_api_key
     os.environ["GROQ_API_KEY"] = groq_api_key
     
     llm = ChatGroq(
         api_key=groq_api_key,
-        model_name="llama3-70b-8192",
-        temperature=0.1  # Lower temperature for more factual responses
+        model_name="llama3-70b-8192"
     )
     
-    # Create a base retriever with similarity search and MMR combination
-    base_retriever = st.session_state.vector_store.as_retriever(
-        search_type="mmr",  # Using MMR for better diversity
-        search_kwargs={
-            "k": 10,  # Retrieve more documents initially
-            "fetch_k": 20,  # Consider more candidates
-            "lambda_mult": 0.7  # Balance relevance and diversity
-        }
+    retriever = st.session_state.vector_store.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": 5}
     )
     
-    # Add contextual compression to filter out irrelevant passages
-    compressor = LLMChainExtractor.from_llm(llm)
-    retriever = ContextualCompressionRetriever(
-        base_compressor=compressor,
-        base_retriever=base_retriever
-    )
-    
-    # Improved prompt template with specific guidance
     template = """
-    You are an expert assistant specializing in insurance and regulatory information for IRDAI (Insurance Regulatory and Development Authority of India) and UIDAI (Unique Identification Authority of India). 
+    You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
+    If the information is not available in the context, say so clearly.
     
-    Answer the question based ONLY on the provided context. Be direct, accurate, and provide specific details from the context.
+    When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
+    Pay special attention to the "Last Updated" dates and present them in your answer.
     
-    Guidelines:
-    1. When mentioning regulations or acts, always include their full names, dates, and reference numbers if available.
-    2. If asked about the "latest" regulations, focus on the most recently updated ones based on dates in the context.
-    3. Always cite the source of your information by mentioning the specific website or document.
-    4. If the information is not available in the context, clearly state that you cannot provide an answer based on the available information.
-    5. Do not make up information or guess if it's not in the context.
-    6. If there are PDF documents that might contain relevant information, suggest them as additional resources.
+    Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
     
     Context:
     {context}
@@ -320,63 +306,37 @@ def initialize_llm():
     
     st.session_state.qa_chain = qa_chain
 
-def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 5):
-    """Find relevant PDFs with improved semantic matching."""
+def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    # Use same model as main embeddings for consistency
-    model = SentenceTransformer("all-mpnet-base-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    query_embedding = model.encode(query)
     
-    # Enhanced query expansion for better matching
-    expanded_query = f"{query} insurance regulation policy document IRDAI UIDAI"
-    query_embedding = model.encode(expanded_query)
-    
-    # Build richer context for each PDF
     pdf_texts = []
     for pdf in pdf_links:
-        # Create a more comprehensive representation
-        context_text = f"Title: {pdf['text']} "
-        context_text += f"Context: {pdf['context']} "
-        
+        context_text = f"{pdf['text']} {pdf['context']}"
         if 'metadata' in pdf and pdf['metadata']:
             for key, value in pdf['metadata'].items():
-                context_text += f"{key}: {value} "
-        
-        # Add the URL as a feature (domain name can be informative)
-        domain = urllib.parse.urlparse(pdf['url']).netloc
-        context_text += f"Source: {domain}"
-        
+                context_text += f" {key}: {value}"
         pdf_texts.append(context_text)
     
     pdf_embeddings = model.encode(pdf_texts)
     
-    # Create FAISS index with cosine similarity (L2 normalized vectors)
     dimension = pdf_embeddings.shape[1]
-    pdf_embeddings_normalized = pdf_embeddings / np.linalg.norm(pdf_embeddings, axis=1, keepdims=True)
-    query_embedding_normalized = query_embedding / np.linalg.norm(query_embedding)
+    index = faiss.IndexFlatL2(dimension)
+    index.add(pdf_embeddings)
     
-    index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity with normalized vectors
-    index.add(pdf_embeddings_normalized)
+    distances, indices = index.search(np.array([query_embedding]), top_k)
     
-    distances, indices = index.search(np.array([query_embedding_normalized]), top_k)
-    
-    # Filter by relevance threshold
-    relevance_threshold = 0.5  # Adjust as needed
     results = []
-    
-    for i, idx in enumerate(indices[0]):
-        similarity = distances[0][i]
-        if similarity > relevance_threshold and idx < len(pdf_links):
-            # Add similarity score to the result
-            result = pdf_links[idx].copy()
-            result['similarity'] = float(similarity)
-            results.append(result)
+    for idx in indices[0]:
+        if idx < len(pdf_links):
+            results.append(pdf_links[idx])
     
     return results
 
-# UI improvements
-st.title("Insurance Regulatory Intelligence Bot")
+st.title("Web Intelligence BOT")
 
 with st.sidebar:
     st.header("Configuration")
@@ -390,122 +350,50 @@ with st.sidebar:
             initialize_rag_system()
             if st.session_state.initialized:
                 initialize_llm()
-    
-    # Add advanced settings
-    with st.expander("Advanced Settings"):
-        if 'initialized' in st.session_state and st.session_state.initialized:
-            st.slider("Number of documents to retrieve", 3, 15, 10, key="k_documents")
-            st.slider("Relevance threshold (0-100)", 0, 100, 50, key="relevance_threshold")
 
 if 'status' in st.session_state:
     st.info(st.session_state.status)
 
 if 'initialized' in st.session_state and st.session_state.initialized:
-    st.subheader("Ask a question about IRDAI or UIDAI regulations")
+    st.subheader("Ask a question")
+    query = st.text_input("What would you like to know?")
     
-    # Suggested questions for better user experience
-    st.caption("Example questions:")
-    example_questions = [
-        "What are the latest IRDAI regulations?",
-        "What are the KYC requirements for insurance?",
-        "What is the process for filing a complaint against an insurance company?",
-        "What are the penalties for non-compliance with IRDAI regulations?",
-        "What are the latest updates to the Aadhaar Act?"
-    ]
-    for q in example_questions:
-        if st.button(q, key=f"btn_{q}", use_container_width=True):
-            st.session_state.query = q
-    
-    # Query input with history
-    if 'query' not in st.session_state:
-        st.session_state.query = ""
-    
-    query = st.text_input("What would you like to know?", value=st.session_state.query)
-    
-    if query and st.button("Search", use_container_width=True):
-        st.session_state.query = query  # Save query for context
-        
+    if query and st.button("Search"):
         with st.spinner("Searching for information..."):
-            # Update retrieval parameters from UI if available
-            if 'k_documents' in st.session_state:
-                st.session_state.qa_chain.retriever.search_kwargs["k"] = st.session_state.k_documents
-            
-            if 'relevance_threshold' in st.session_state:
-                threshold = st.session_state.relevance_threshold / 100
-                # Apply threshold in the find_relevant_pdfs function
-            
             result = st.session_state.qa_chain({"query": query})
             answer = result["result"]
             source_docs = result["source_documents"]
             
-            # Find relevant PDFs with updated threshold
-            relevant_pdfs = find_relevant_pdfs(
-                query, 
-                st.session_state.pdf_links, 
-                top_k=5
-            )
+            relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
             
             st.subheader("Answer")
-            st.markdown(answer)
+            st.write(answer)
             
-            # Source citation with better formatting
             with st.expander("Sources"):
-                sources = {}
+                sources = set()
                 for doc in source_docs:
-                    source_url = doc.metadata["source"]
-                    domain = urllib.parse.urlparse(source_url).netloc
-                    
-                    if source_url not in sources:
-                        sources[source_url] = {
-                            "domain": domain,
-                            "chunks": []
-                        }
-                    
-                    # Add a snippet from the document with highlighting
-                    snippet = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-                    sources[source_url]["chunks"].append(snippet)
+                    sources.add(doc.metadata["source"])
                 
-                # Display sources with snippets
-                for source_url, info in sources.items():
-                    st.markdown(f"#### [{info['domain']}]({source_url})")
-                    for i, chunk in enumerate(info["chunks"][:3]):  # Limit to 3 snippets per source
-                        st.markdown(f"**Excerpt {i+1}:**")
-                        st.text(chunk)
-                    
-                    if len(info["chunks"]) > 3:
-                        st.caption(f"...and {len(info['chunks']) - 3} more relevant sections")
+                for source in sources:
+                    st.write(f"- [{source}]({source})")
             
-            # PDF recommendations with clear relevance indicators
             if relevant_pdfs:
                 st.subheader("Relevant PDF Documents")
-                
-                for pdf in sorted(relevant_pdfs, key=lambda x: x.get('similarity', 0), reverse=True):
-                    col1, col2 = st.columns([3, 1])
+                for pdf in relevant_pdfs:
+                    metadata_text = ""
+                    if 'metadata' in pdf and pdf['metadata']:
+                        for key, value in pdf['metadata'].items():
+                            if value:
+                                metadata_text += f"{key}: {value}, "
+                        metadata_text = metadata_text.rstrip(", ")
                     
-                    with col1:
-                        st.markdown(f"[{pdf['text']}]({pdf['url']})")
-                        
-                        metadata_text = ""
-                        if 'metadata' in pdf and pdf['metadata']:
-                            for key, value in pdf['metadata'].items():
-                                if value:
-                                    metadata_text += f"{key}: {value}, "
-                            metadata_text = metadata_text.rstrip(", ")
-                        
-                        if metadata_text:
-                            st.caption(f"{metadata_text}")
-                        else:
-                            st.caption(f"Context: {pdf['context'][:100]}...")
-                    
-                    with col2:
-                        # Show relevance score as a progress bar
-                        if 'similarity' in pdf:
-                            relevance = int(pdf['similarity'] * 100)
-                            st.caption("Relevance:")
-                            st.progress(pdf['similarity'])
-                            st.caption(f"{relevance}%")
+                    st.markdown(f"[{pdf['text']}]({pdf['url']})")
+                    if metadata_text:
+                        st.caption(f"{metadata_text}")
+                    else:
+                        st.caption(f"Context: {pdf['context']}")
             else:
-                st.info("No relevant PDF documents found")
+                st.info(" ")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
