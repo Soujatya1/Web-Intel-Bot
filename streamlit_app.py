@@ -65,7 +65,6 @@ class SentenceTransformerEmbeddings(Embeddings):
         return embedding.tolist()
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
-    """Fetch content from a website and extract text, tables, and PDF links."""
     
     cache_file = os.path.join(CACHE_DIR, urllib.parse.quote_plus(url))
     if os.path.exists(cache_file):
@@ -158,7 +157,6 @@ def extract_table_data(soup, base_url):
     return table_data
 
 def extract_pdf_links(soup, base_url):
-    """Extract PDF links with improved metadata extraction."""
     pdf_links = []
     
     tables = soup.find_all('table')
@@ -222,8 +220,7 @@ def extract_pdf_links(soup, base_url):
     return pdf_links
 
 def initialize_rag_system():
-    """Initialize the RAG system by scraping websites and creating vector store."""
-    st.session_state.status = "Initializing RAG system..."
+    st.session_state.status = "Initializing RAG system"
     
     all_docs = []
     all_pdf_links = []
@@ -249,10 +246,10 @@ def initialize_rag_system():
         
         progress_bar.progress((i + 1) / len(WEBSITES))
     
-    st.session_state.status = "Creating embeddings..."
+    st.session_state.status = "Creating embeddings"
     embeddings = SentenceTransformerEmbeddings()
     
-    st.session_state.status = "Building vector store..."
+    st.session_state.status = "Building vector store"
     vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
     
     st.session_state.vector_store = vector_store
