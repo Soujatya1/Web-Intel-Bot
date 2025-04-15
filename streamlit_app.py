@@ -8,7 +8,7 @@ import tempfile
 import urllib.parse
 from bs4 import BeautifulSoup
 from typing import List, Dict, Tuple
-from sentence_transformers import SentenceTransformer
+import time
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
@@ -17,52 +17,145 @@ from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
 
+# Add the following imports for handling offline mode
+import logging
+from pathlib import Path
+import shutil
+
 st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 WEBSITES = [
-    	    "https://irdai.gov.in/rules",
-            "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-            "https://irdai.gov.in/updated-regulations",
-            "https://irdai.gov.in/notifications",
-            "https://irdai.gov.in/circulars",
-            "https://irdai.gov.in/orders1",
-            "https://irdai.gov.in/exposure-drafts",
-            "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-            "https://irdai.gov.in/cic-orders",
-            "https://irdai.gov.in/antimoney-laundering",
-            "https://irdai.gov.in/other-communication",
-            "https://irdai.gov.in/directory-of-employees",
-            "https://irdai.gov.in/warnings-and-penalties",
-            "https://uidai.gov.in/en/",
-            "https://uidai.gov.in/en/about-uidai/legal-framework.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
-            "https://enforcementdirectorate.gov.in/pmla",
-            "https://enforcementdirectorate.gov.in/fema",
-            "https://enforcementdirectorate.gov.in/bns",
-            "https://enforcementdirectorate.gov.in/bnss",
-            "https://enforcementdirectorate.gov.in/bsa"
+    "https://irdai.gov.in/rules",
+    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+    "https://irdai.gov.in/updated-regulations",
+    "https://irdai.gov.in/notifications",
+    "https://irdai.gov.in/circulars",
+    "https://irdai.gov.in/orders1",
+    "https://irdai.gov.in/exposure-drafts",
+    "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+    "https://irdai.gov.in/cic-orders",
+    "https://irdai.gov.in/antimoney-laundering",
+    "https://irdai.gov.in/other-communication",
+    "https://irdai.gov.in/directory-of-employees",
+    "https://irdai.gov.in/warnings-and-penalties",
+    "https://uidai.gov.in/en/",
+    "https://uidai.gov.in/en/about-uidai/legal-framework.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+    "https://enforcementdirectorate.gov.in/pmla",
+    "https://enforcementdirectorate.gov.in/fema",
+    "https://enforcementdirectorate.gov.in/bns",
+    "https://enforcementdirectorate.gov.in/bnss",
+    "https://enforcementdirectorate.gov.in/bsa"
 ]
 
 CACHE_DIR = ".web_cache"
+MODEL_CACHE_DIR = ".model_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
-class SentenceTransformerEmbeddings(Embeddings):
-    def __init__(self, model_name="all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+# Custom embeddings class with offline support
+class CustomEmbeddings(Embeddings):
+    def __init__(self, cache_folder=MODEL_CACHE_DIR):
+        self.cache_folder = cache_folder
+        self.model = None
+        self.initialize_model()
         
+    def initialize_model(self):
+        try:
+            # Try to import and use SentenceTransformer
+            from sentence_transformers import SentenceTransformer
+            
+            try:
+                # First try using the local cache
+                self.model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=self.cache_folder)
+                logger.info("Successfully loaded model from cache")
+            except Exception as e:
+                logger.warning(f"Could not load model from cache: {str(e)}")
+                # If that fails, try downloading with retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"Attempting to download model (attempt {attempt+1}/{max_retries})")
+                        self.model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=self.cache_folder)
+                        logger.info("Successfully downloaded model")
+                        break
+                    except Exception as e:
+                        logger.error(f"Download attempt {attempt+1} failed: {str(e)}")
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # Exponential backoff
+                            logger.info(f"Waiting {wait_time} seconds before retrying")
+                            time.sleep(wait_time)
+                        else:
+                            raise
+        except ImportError:
+            logger.error("sentence_transformers module not available")
+            st.error("Required modules not available. Please install sentence_transformers.")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to initialize embeddings model: {str(e)}")
+            st.error(f"Failed to initialize embeddings model: {str(e)}")
+            raise
+    
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = self.model.encode(texts)
-        return embeddings.tolist()
+        if self.model is None:
+            raise ValueError("Model not initialized")
+        try:
+            embeddings = self.model.encode(texts)
+            return embeddings.tolist()
+        except Exception as e:
+            logger.error(f"Error encoding documents: {str(e)}")
+            # Fall back to simple embeddings if model fails
+            return self._fallback_embeddings(texts)
     
     def embed_query(self, text: str) -> List[float]:
-        embedding = self.model.encode([text])[0]
-        return embedding.tolist()
+        if self.model is None:
+            raise ValueError("Model not initialized")
+        try:
+            embedding = self.model.encode([text])[0]
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Error encoding query: {str(e)}")
+            # Fall back to simple embeddings if model fails
+            return self._fallback_embeddings([text])[0]
+    
+    def _fallback_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Extremely simple fallback embedding method using hashing"""
+        logger.warning("Using fallback embedding method - results will be suboptimal")
+        dimension = 384  # Match MiniLM dimension
+        results = []
+        
+        for text in texts:
+            # Create a simple hash-based embedding
+            import hashlib
+            embedding = np.zeros(dimension)
+            
+            # Break text into words and hash each word
+            words = text.split()
+            for i, word in enumerate(words):
+                word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
+                # Use the hash to set values in the embedding
+                for j in range(min(20, len(word))):  # Use first 20 chars max
+                    pos = (word_hash + ord(word[j]) + j) % dimension
+                    embedding[pos] = 0.1 * ((i % 10) + 1) + 0.01 * ord(word[j]) / 255.0
+            
+            # Normalize the embedding
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+                
+            results.append(embedding.tolist())
+            
+        return results
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
@@ -82,6 +175,7 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
             with open(cache_file, 'w', encoding='utf-8') as f:
                 f.write(content)
         except Exception as e:
+            logger.error(f"Error fetching {url}: {str(e)}")
             return f"Error fetching {url}: {str(e)}", []
     
     soup = BeautifulSoup(content, 'html.parser')
@@ -247,94 +341,109 @@ def initialize_rag_system():
         progress_bar.progress((i + 1) / len(WEBSITES))
     
     st.session_state.status = "Creating embeddings"
-    embeddings = SentenceTransformerEmbeddings()
-    
-    st.session_state.status = "Building vector store"
-    vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
-    
-    st.session_state.vector_store = vector_store
-    st.session_state.pdf_links = all_pdf_links
-    st.session_state.status = "System initialized!"
-    st.session_state.initialized = True
+    try:
+        # Use our custom embeddings class with offline support
+        embeddings = CustomEmbeddings()
+        
+        st.session_state.status = "Building vector store"
+        vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
+        
+        st.session_state.vector_store = vector_store
+        st.session_state.pdf_links = all_pdf_links
+        st.session_state.status = "System initialized!"
+        st.session_state.initialized = True
+    except Exception as e:
+        st.session_state.status = f"Error during initialization: {str(e)}"
+        logger.error(f"Initialization error: {str(e)}")
+        st.error(f"Error: {str(e)}")
 
 def initialize_llm():
     groq_api_key = st.session_state.groq_api_key
     os.environ["GROQ_API_KEY"] = groq_api_key
     
-    llm = ChatGroq(
-        api_key=groq_api_key,
-        model_name="llama-4-scout-17b-16e-instruct"
-    )
-    
-    retriever = st.session_state.vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 5}
-    )
-    
-    template = """
-    You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
-    If the information is not available in the context, say so clearly.
-    
-    When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
-    Pay special attention to the "Last Updated" dates and present them in your answer.
-    
-    Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
-    
-    Context:
-    {context}
-    
-    Question: {question}
-    
-    Answer:
-    """
-    
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["context", "question"]
-    )
-    
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
-    )
-    
-    st.session_state.qa_chain = qa_chain
+    try:
+        llm = ChatGroq(
+            api_key=groq_api_key,
+            model_name="llama-4-scout-17b-16e-instruct"
+        )
+        
+        retriever = st.session_state.vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 5}
+        )
+        
+        template = """
+        You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
+        If the information is not available in the context, say so clearly.
+        
+        When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
+        Pay special attention to the "Last Updated" dates and present them in your answer.
+        
+        Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
+        
+        Context:
+        {context}
+        
+        Question: {question}
+        
+        Answer:
+        """
+        
+        prompt = PromptTemplate(
+            template=template,
+            input_variables=["context", "question"]
+        )
+        
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            return_source_documents=True,
+            chain_type_kwargs={"prompt": prompt}
+        )
+        
+        st.session_state.qa_chain = qa_chain
+    except Exception as e:
+        st.error(f"Error initializing LLM: {str(e)}")
+        logger.error(f"LLM initialization error: {str(e)}")
 
 def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    query_embedding = model.encode(query)
-    
-    pdf_texts = []
-    for pdf in pdf_links:
-        context_text = f"{pdf['text']} {pdf['context']}"
-        if 'metadata' in pdf and pdf['metadata']:
-            for key, value in pdf['metadata'].items():
-                context_text += f" {key}: {value}"
-        pdf_texts.append(context_text)
-    
-    pdf_embeddings = model.encode(pdf_texts)
-    
-    dimension = pdf_embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(pdf_embeddings)
-    
-    distances, indices = index.search(np.array([query_embedding]), top_k)
-    
-    results = []
-    for idx in indices[0]:
-        if idx < len(pdf_links):
-            results.append(pdf_links[idx])
-    
-    return results
+    try:
+        # Use our custom embeddings for consistency
+        embedder = CustomEmbeddings()
+        query_embedding = embedder.embed_query(query)
+        
+        pdf_texts = []
+        for pdf in pdf_links:
+            context_text = f"{pdf['text']} {pdf['context']}"
+            if 'metadata' in pdf and pdf['metadata']:
+                for key, value in pdf['metadata'].items():
+                    context_text += f" {key}: {value}"
+            pdf_texts.append(context_text)
+        
+        pdf_embeddings = np.array(embedder.embed_documents(pdf_texts))
+        
+        dimension = len(query_embedding)
+        index = faiss.IndexFlatL2(dimension)
+        index.add(pdf_embeddings)
+        
+        distances, indices = index.search(np.array([query_embedding]), top_k)
+        
+        results = []
+        for idx in indices[0]:
+            if idx < len(pdf_links):
+                results.append(pdf_links[idx])
+        
+        return results
+    except Exception as e:
+        logger.error(f"Error finding relevant PDFs: {str(e)}")
+        st.warning(f"Could not find relevant PDFs: {str(e)}")
+        return []
 
-st.title("Web Intelligence BOT")
-
+# Add instructions for offline mode setup
 with st.sidebar:
     st.header("Configuration")
     groq_api_key = st.text_input("Enter Groq API Key", type="password")
@@ -342,12 +451,20 @@ with st.sidebar:
     if groq_api_key:
         st.session_state.groq_api_key = groq_api_key
         
+        st.markdown("### Offline Mode Setup")
+        st.markdown("""
+        If you're experiencing connection issues to Hugging Face, you can use offline mode by:
+        1. Downloading the model manually from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+        2. Place the files in the `.model_cache` directory
+        """)
+        
         if st.button("Initialize System") or ('initialized' not in st.session_state):
             st.session_state.initialized = False
             initialize_rag_system()
             if st.session_state.initialized:
                 initialize_llm()
 
+# Main UI
 if 'status' in st.session_state:
     st.info(st.session_state.status)
 
@@ -357,40 +474,44 @@ if 'initialized' in st.session_state and st.session_state.initialized:
     
     if query and st.button("Search"):
         with st.spinner("Searching for information..."):
-            result = st.session_state.qa_chain({"query": query})
-            answer = result["result"]
-            source_docs = result["source_documents"]
-            
-            relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
-            
-            st.subheader("Answer")
-            st.write(answer)
-            
-            with st.expander("Sources"):
-                sources = set()
-                for doc in source_docs:
-                    sources.add(doc.metadata["source"])
+            try:
+                result = st.session_state.qa_chain({"query": query})
+                answer = result["result"]
+                source_docs = result["source_documents"]
                 
-                for source in sources:
-                    st.write(f"- [{source}]({source})")
-            
-            if relevant_pdfs:
-                st.subheader("Relevant PDF Documents")
-                for pdf in relevant_pdfs:
-                    metadata_text = ""
-                    if 'metadata' in pdf and pdf['metadata']:
-                        for key, value in pdf['metadata'].items():
-                            if value:
-                                metadata_text += f"{key}: {value}, "
-                        metadata_text = metadata_text.rstrip(", ")
+                relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
+                
+                st.subheader("Answer")
+                st.write(answer)
+                
+                with st.expander("Sources"):
+                    sources = set()
+                    for doc in source_docs:
+                        sources.add(doc.metadata["source"])
                     
-                    st.markdown(f"[{pdf['text']}]({pdf['url']})")
-                    if metadata_text:
-                        st.caption(f"{metadata_text}")
-                    else:
-                        st.caption(f"Context: {pdf['context']}")
-            else:
-                st.info(" ")
+                    for source in sources:
+                        st.write(f"- [{source}]({source})")
+                
+                if relevant_pdfs:
+                    st.subheader("Relevant PDF Documents")
+                    for pdf in relevant_pdfs:
+                        metadata_text = ""
+                        if 'metadata' in pdf and pdf['metadata']:
+                            for key, value in pdf['metadata'].items():
+                                if value:
+                                    metadata_text += f"{key}: {value}, "
+                            metadata_text = metadata_text.rstrip(", ")
+                        
+                        st.markdown(f"[{pdf['text']}]({pdf['url']})")
+                        if metadata_text:
+                            st.caption(f"{metadata_text}")
+                        else:
+                            st.caption(f"Context: {pdf['context']}")
+                else:
+                    st.info("No relevant PDF documents found.")
+            except Exception as e:
+                st.error(f"Error processing query: {str(e)}")
+                logger.error(f"Query processing error: {str(e)}")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
