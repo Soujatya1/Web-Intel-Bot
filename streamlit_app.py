@@ -364,7 +364,7 @@ def initialize_llm():
     try:
         llm = ChatGroq(
             api_key=groq_api_key,
-            model_name="llama-4-scout-17b-16e-instruct"
+            model_name="llama-3.3-70b-versatile"
         )
         
         retriever = st.session_state.vector_store.as_retriever(
