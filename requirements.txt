@@ -16,4 +16,3 @@ webdriver_manager
 faiss-cpu
 numpy
 unstructured
-langchain_chains
