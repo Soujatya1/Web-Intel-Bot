@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_community.embeddings import FastEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
@@ -52,7 +52,7 @@ WEBSITES = [
 CACHE_DIR = ".web_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-embeddings = FastEmbeddings()
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
@@ -296,8 +296,8 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    # Replace SentenceTransformer with FastEmbeddings
-    embedder = FastEmbeddings()
+    # Use HuggingFaceEmbeddings instead
+    embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     query_embedding = embedder.embed_query(query)
     
     pdf_texts = []
