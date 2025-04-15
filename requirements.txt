@@ -1,6 +1,6 @@
 langchain-community
 langchain_groq
-langchain_core
+langchain-core
 PyPDF2
 streamlit
 faiss-cpu
