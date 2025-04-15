@@ -16,7 +16,7 @@ from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-from langchain_core.chains import ConversationRetrievalChain
+from langchain.chains import ConversationRetrievalChain
 from langchain.retrievers import BM25Retriever, EnsembleRetriever
 from langchain.memory import ConversationBufferMemory
 
