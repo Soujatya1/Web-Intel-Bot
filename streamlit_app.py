@@ -8,79 +8,82 @@ import tempfile
 import urllib.parse
 from bs4 import BeautifulSoup
 from typing import List, Dict, Tuple
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from sklearn.feature_extraction.text import TfidfVectorizer
 from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
+from langchain.chains import RetrievalQA, ConversationRetrievalChain
+from langchain.retrievers import BM25Retriever, EnsembleRetriever
+from langchain.memory import ConversationBufferMemory
 
 st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
 
 WEBSITES = [
-    	    "https://irdai.gov.in/rules",
-            "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-            "https://irdai.gov.in/updated-regulations",
-            "https://irdai.gov.in/notifications",
-            "https://irdai.gov.in/circulars",
-            "https://irdai.gov.in/orders1",
-            "https://irdai.gov.in/exposure-drafts",
-            "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-            "https://irdai.gov.in/cic-orders",
-            "https://irdai.gov.in/antimoney-laundering",
-            "https://irdai.gov.in/other-communication",
-            "https://irdai.gov.in/directory-of-employees",
-            "https://irdai.gov.in/warnings-and-penalties",
-            "https://uidai.gov.in/en/",
-            "https://uidai.gov.in/en/about-uidai/legal-framework.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
-            "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
-            "https://enforcementdirectorate.gov.in/pmla",
-            "https://enforcementdirectorate.gov.in/fema",
-            "https://enforcementdirectorate.gov.in/bns",
-            "https://enforcementdirectorate.gov.in/bnss",
-            "https://enforcementdirectorate.gov.in/bsa"
+    "https://irdai.gov.in/rules",
+    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+    "https://irdai.gov.in/updated-regulations",
+    "https://irdai.gov.in/notifications",
+    "https://irdai.gov.in/circulars",
+    "https://irdai.gov.in/orders1",
+    "https://irdai.gov.in/exposure-drafts",
+    "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+    "https://irdai.gov.in/cic-orders",
+    "https://irdai.gov.in/antimoney-laundering",
+    "https://irdai.gov.in/other-communication",
+    "https://irdai.gov.in/directory-of-employees",
+    "https://irdai.gov.in/warnings-and-penalties",
+    "https://uidai.gov.in/en/",
+    "https://uidai.gov.in/en/about-uidai/legal-framework.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+    "https://enforcementdirectorate.gov.in/pmla",
+    "https://enforcementdirectorate.gov.in/fema",
+    "https://enforcementdirectorate.gov.in/bns",
+    "https://enforcementdirectorate.gov.in/bnss",
+    "https://enforcementdirectorate.gov.in/bsa"
 ]
 
 CACHE_DIR = ".web_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-class TfidfEmbeddings(Embeddings):
-    def __init__(self):
-        self.vectorizer = TfidfVectorizer(lowercase=True, stop_words='english')
-        self.fitted = False
-        self.documents = []
+# Replace TF-IDF with Neural Embeddings
+class NeuralEmbeddings(Embeddings):
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
         
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        if not self.fitted:
-            # First time encountering documents, fit the vectorizer
-            self.vectorizer.fit(texts)
-            self.fitted = True
-            self.documents = texts
-        
-        # Transform documents to TF-IDF vectors
-        tfidf_matrix = self.vectorizer.transform(texts)
-        return tfidf_matrix.toarray().tolist()
+        return self.model.encode(texts).tolist()
     
     def embed_query(self, text: str) -> List[float]:
-        # If vectorizer hasn't been fitted yet, return zeros
-        if not self.fitted:
-            vocab_size = 100  # Default size if not fitted
-            return [0.0] * vocab_size
-            
-        # Transform query to TF-IDF vector
-        query_vector = self.vectorizer.transform([text])
-        return query_vector.toarray()[0].tolist()
+        return self.model.encode([text])[0].tolist()
 
-embeddings = TfidfEmbeddings()
+# Use neural embeddings instead of TF-IDF
+embeddings = NeuralEmbeddings()
+
+def rerank_documents(query, documents, top_k=5):
+    try:
+        reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
+        pairs = [(query, doc.page_content) for doc in documents]
+        scores = reranker.predict(pairs)
+        
+        # Create (score, doc) pairs and sort by score
+        scored_docs = list(zip(scores, documents))
+        scored_docs.sort(reverse=True)  # Higher score = better
+        
+        # Return top_k documents
+        return [doc for _, doc in scored_docs[:top_k]]
+    except Exception as e:
+        st.warning(f"Error during reranking: {str(e)}")
+        return documents[:top_k]  # Fallback to original ordering
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
@@ -237,6 +240,28 @@ def extract_pdf_links(soup, base_url):
     
     return pdf_links
 
+# New function to extract text from PDFs
+def extract_pdf_content(pdf_url):
+    try:
+        import fitz  # PyMuPDF
+        
+        response = requests.get(pdf_url, stream=True, timeout=10)
+        if response.status_code == 200:
+            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp_file:
+                temp_file.write(response.content)
+                temp_file.flush()
+                
+                doc = fitz.open(temp_file.name)
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                
+                return text
+        return None
+    except Exception as e:
+        print(f"Error extracting PDF content: {str(e)}")
+        return None
+
 def initialize_rag_system():
     st.session_state.status = "Initializing RAG system"
     
@@ -248,9 +273,11 @@ def initialize_rag_system():
         st.session_state.status = f"Processing {website}..."
         content, pdf_links = fetch_website_content(website)
         
+        # Improved text splitting with larger chunks and more overlap
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50
+            chunk_size=1000,  # Increased from 500
+            chunk_overlap=200,  # Increased from 50
+            separators=["\n\n", "\n", " ", ""]  # Better natural breaks
         )
         
         if content and not content.startswith("Error"):
@@ -264,12 +291,49 @@ def initialize_rag_system():
         
         progress_bar.progress((i + 1) / len(WEBSITES))
     
-    st.session_state.status = "Creating embeddings"
+    # Process a limited number of PDFs to extract their content
+    st.session_state.status = "Processing PDF documents..."
+    pdf_progress = st.progress(0)
+    max_pdfs = min(10, len(all_pdf_links))  # Limit to 10 PDFs for performance
     
-    st.session_state.status = "Building vector store"
+    for i, pdf_link in enumerate(all_pdf_links[:max_pdfs]):
+        pdf_content = extract_pdf_content(pdf_link['url'])
+        if pdf_content:
+            chunks = text_splitter.split_text(pdf_content)
+            for chunk in chunks:
+                all_docs.append(Document(
+                    page_content=chunk,
+                    metadata={
+                        "source": pdf_link['url'], 
+                        "type": "pdf", 
+                        "title": pdf_link['text'],
+                        "description": pdf_link['metadata'].get('description', ''),
+                        "last_updated": pdf_link['metadata'].get('last_updated', '')
+                    }
+                ))
+        pdf_progress.progress((i + 1) / max_pdfs)
+    
+    st.session_state.status = "Creating embeddings and vector store..."
+    
+    # Create the vector store
     vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
     
+    # Create BM25 retriever for keyword search
+    texts = [doc.page_content for doc in all_docs]
+    bm25_retriever = BM25Retriever.from_texts(texts)
+    bm25_retriever.k = 5
+    
+    # Create vector store retriever for semantic search
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    
+    # Create ensemble retriever combining both approaches
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.3, 0.7]  # Weight semantic search higher
+    )
+    
     st.session_state.vector_store = vector_store
+    st.session_state.retriever = ensemble_retriever
     st.session_state.pdf_links = all_pdf_links
     st.session_state.status = "System initialized!"
     st.session_state.initialized = True
@@ -283,26 +347,31 @@ def initialize_llm():
         model_name="llama-3.3-70b-versatile"
     )
     
-    retriever = st.session_state.vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 5}
-    )
-    
+    # Enhanced prompt with better instructions
     template = """
-    You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
-    If the information is not available in the context, say so clearly.
+    You are an expert assistant specializing in Indian insurance and identity regulatory information from IRDAI and UIDAI websites. Answer the question based on the provided context.
     
-    When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
-    Pay special attention to the "Last Updated" dates and present them in your answer.
-    
-    Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
+    Follow these guidelines:
+    1. Focus on extracting factual information directly from the provided context
+    2. When mentioning dates, always include the full date format as it appears in the source
+    3. If referring to regulatory documents, include their reference numbers and publication dates
+    4. When citing information, clearly indicate which specific website the information comes from
+    5. If the question asks about "latest" information, identify the most recent document based on date and explain why it's the most current
+    6. If the context doesn't contain enough information to answer confidently, state this clearly
     
     Context:
     {context}
     
     Question: {question}
     
-    Answer:
+    Step by step thinking:
+    1. First, identify the key entities and concepts in the question
+    2. Scan the context for relevant information related to these entities
+    3. Analyze any dates to determine chronology and recency
+    4. Verify if the information directly answers the question
+    5. Formulate a precise, factual answer based strictly on the context provided
+    
+    Your answer:
     """
     
     prompt = PromptTemplate(
@@ -310,22 +379,38 @@ def initialize_llm():
         input_variables=["context", "question"]
     )
     
-    qa_chain = RetrievalQA.from_chain_type(
+    # Add conversation memory
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True
+    )
+    
+    # Use ConversationRetrievalChain with memory
+    qa_chain = ConversationRetrievalChain.from_llm(
         llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
+        retriever=st.session_state.retriever,
+        memory=memory,
         return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
+        combine_docs_chain_kwargs={"prompt": prompt}
     )
     
     st.session_state.qa_chain = qa_chain
+
+def get_relevant_context(query):
+    # First get more documents than needed
+    initial_docs = st.session_state.retriever.get_relevant_documents(query)
+    
+    # Then rerank to get the most relevant ones
+    reranked_docs = rerank_documents(query, initial_docs, top_k=5)
+    
+    return reranked_docs
 
 def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    # Create TF-IDF embedder
-    embedder = TfidfEmbeddings()
+    # Use the same neural embeddings for PDF retrieval
+    model = SentenceTransformer("all-MiniLM-L6-v2")
     
     pdf_texts = []
     for pdf in pdf_links:
@@ -335,12 +420,12 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
                 context_text += f" {key}: {value}"
         pdf_texts.append(context_text)
     
-    # Fit and get embeddings for pdf_texts
-    pdf_embeddings = np.array(embedder.embed_documents(pdf_texts))
+    # Get embeddings for pdf_texts
+    pdf_embeddings = np.array(model.encode(pdf_texts))
     
     # Get query embedding
-    query_embedding = embedder.embed_query(query)
-    query_embedding_np = np.array([query_embedding])
+    query_embedding = np.array(model.encode([query])[0])
+    query_embedding_np = query_embedding.reshape(1, -1)
     
     dimension = pdf_embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
@@ -379,10 +464,21 @@ if 'initialized' in st.session_state and st.session_state.initialized:
     
     if query and st.button("Search"):
         with st.spinner("Searching for information..."):
-            result = st.session_state.qa_chain({"query": query})
-            answer = result["result"]
-            source_docs = result["source_documents"]
+            # Get relevant context documents via reranking
+            relevant_docs = get_relevant_context(query)
             
+            # Process query with conversation chain
+            result = st.session_state.qa_chain({"question": query})
+            
+            # Extract answer and sources
+            if "answer" in result:  # ConversationRetrievalChain format
+                answer = result["answer"]
+            else:  # Fallback for other chain formats
+                answer = result["result"]
+                
+            source_docs = result["source_documents"] if "source_documents" in result else []
+            
+            # Find relevant PDFs
             relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
             
             st.subheader("Answer")
@@ -412,7 +508,7 @@ if 'initialized' in st.session_state and st.session_state.initialized:
                     else:
                         st.caption(f"Context: {pdf['context']}")
             else:
-                st.info(" ")
+                st.info("No specific PDF documents found for this query.")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
