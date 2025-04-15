@@ -8,7 +8,7 @@ import tempfile
 import urllib.parse
 from bs4 import BeautifulSoup
 from typing import List, Dict, Tuple
-from sentence_transformers import SentenceTransformer, CrossEncoder
+import time
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
@@ -16,11 +16,17 @@ from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
-from langchain.chains import ConversationRetrievalChain
-from langchain.retrievers import BM25Retriever, EnsembleRetriever
-from langchain.memory import ConversationBufferMemory
+
+# Add the following imports for handling offline mode
+import logging
+from pathlib import Path
+import shutil
 
 st.set_page_config(page_title="Web Intelligence BOT", layout="wide")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 WEBSITES = [
     "https://irdai.gov.in/rules",
@@ -53,38 +59,103 @@ WEBSITES = [
 ]
 
 CACHE_DIR = ".web_cache"
+MODEL_CACHE_DIR = ".model_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 
-# Replace TF-IDF with Neural Embeddings
-class NeuralEmbeddings(Embeddings):
-    def __init__(self, model_name="all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+# Custom embeddings class with offline support
+class CustomEmbeddings(Embeddings):
+    def __init__(self, cache_folder=MODEL_CACHE_DIR):
+        self.cache_folder = cache_folder
+        self.model = None
+        self.initialize_model()
         
+    def initialize_model(self):
+        try:
+            # Try to import and use SentenceTransformer
+            from sentence_transformers import SentenceTransformer
+            
+            try:
+                # First try using the local cache
+                self.model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=self.cache_folder)
+                logger.info("Successfully loaded model from cache")
+            except Exception as e:
+                logger.warning(f"Could not load model from cache: {str(e)}")
+                # If that fails, try downloading with retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"Attempting to download model (attempt {attempt+1}/{max_retries})")
+                        self.model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=self.cache_folder)
+                        logger.info("Successfully downloaded model")
+                        break
+                    except Exception as e:
+                        logger.error(f"Download attempt {attempt+1} failed: {str(e)}")
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # Exponential backoff
+                            logger.info(f"Waiting {wait_time} seconds before retrying")
+                            time.sleep(wait_time)
+                        else:
+                            raise
+        except ImportError:
+            logger.error("sentence_transformers module not available")
+            st.error("Required modules not available. Please install sentence_transformers.")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to initialize embeddings model: {str(e)}")
+            st.error(f"Failed to initialize embeddings model: {str(e)}")
+            raise
+    
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self.model.encode(texts).tolist()
+        if self.model is None:
+            raise ValueError("Model not initialized")
+        try:
+            embeddings = self.model.encode(texts)
+            return embeddings.tolist()
+        except Exception as e:
+            logger.error(f"Error encoding documents: {str(e)}")
+            # Fall back to simple embeddings if model fails
+            return self._fallback_embeddings(texts)
     
     def embed_query(self, text: str) -> List[float]:
-        return self.model.encode([text])[0].tolist()
-
-# Use neural embeddings instead of TF-IDF
-embeddings = NeuralEmbeddings()
-
-def rerank_documents(query, documents, top_k=5):
-    try:
-        reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        if self.model is None:
+            raise ValueError("Model not initialized")
+        try:
+            embedding = self.model.encode([text])[0]
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Error encoding query: {str(e)}")
+            # Fall back to simple embeddings if model fails
+            return self._fallback_embeddings([text])[0]
+    
+    def _fallback_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Extremely simple fallback embedding method using hashing"""
+        logger.warning("Using fallback embedding method - results will be suboptimal")
+        dimension = 384  # Match MiniLM dimension
+        results = []
         
-        pairs = [(query, doc.page_content) for doc in documents]
-        scores = reranker.predict(pairs)
-        
-        # Create (score, doc) pairs and sort by score
-        scored_docs = list(zip(scores, documents))
-        scored_docs.sort(reverse=True)  # Higher score = better
-        
-        # Return top_k documents
-        return [doc for _, doc in scored_docs[:top_k]]
-    except Exception as e:
-        st.warning(f"Error during reranking: {str(e)}")
-        return documents[:top_k]  # Fallback to original ordering
+        for text in texts:
+            # Create a simple hash-based embedding
+            import hashlib
+            embedding = np.zeros(dimension)
+            
+            # Break text into words and hash each word
+            words = text.split()
+            for i, word in enumerate(words):
+                word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
+                # Use the hash to set values in the embedding
+                for j in range(min(20, len(word))):  # Use first 20 chars max
+                    pos = (word_hash + ord(word[j]) + j) % dimension
+                    embedding[pos] = 0.1 * ((i % 10) + 1) + 0.01 * ord(word[j]) / 255.0
+            
+            # Normalize the embedding
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+                
+            results.append(embedding.tolist())
+            
+        return results
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
@@ -104,6 +175,7 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
             with open(cache_file, 'w', encoding='utf-8') as f:
                 f.write(content)
         except Exception as e:
+            logger.error(f"Error fetching {url}: {str(e)}")
             return f"Error fetching {url}: {str(e)}", []
     
     soup = BeautifulSoup(content, 'html.parser')
@@ -241,28 +313,6 @@ def extract_pdf_links(soup, base_url):
     
     return pdf_links
 
-# New function to extract text from PDFs
-def extract_pdf_content(pdf_url):
-    try:
-        import fitz  # PyMuPDF
-        
-        response = requests.get(pdf_url, stream=True, timeout=10)
-        if response.status_code == 200:
-            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp_file:
-                temp_file.write(response.content)
-                temp_file.flush()
-                
-                doc = fitz.open(temp_file.name)
-                text = ""
-                for page in doc:
-                    text += page.get_text()
-                
-                return text
-        return None
-    except Exception as e:
-        print(f"Error extracting PDF content: {str(e)}")
-        return None
-
 def initialize_rag_system():
     st.session_state.status = "Initializing RAG system"
     
@@ -274,11 +324,9 @@ def initialize_rag_system():
         st.session_state.status = f"Processing {website}..."
         content, pdf_links = fetch_website_content(website)
         
-        # Improved text splitting with larger chunks and more overlap
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,  # Increased from 500
-            chunk_overlap=200,  # Increased from 50
-            separators=["\n\n", "\n", " ", ""]  # Better natural breaks
+            chunk_size=500,
+            chunk_overlap=50
         )
         
         if content and not content.startswith("Error"):
@@ -292,165 +340,110 @@ def initialize_rag_system():
         
         progress_bar.progress((i + 1) / len(WEBSITES))
     
-    # Process a limited number of PDFs to extract their content
-    st.session_state.status = "Processing PDF documents..."
-    pdf_progress = st.progress(0)
-    max_pdfs = min(10, len(all_pdf_links))  # Limit to 10 PDFs for performance
-    
-    for i, pdf_link in enumerate(all_pdf_links[:max_pdfs]):
-        pdf_content = extract_pdf_content(pdf_link['url'])
-        if pdf_content:
-            chunks = text_splitter.split_text(pdf_content)
-            for chunk in chunks:
-                all_docs.append(Document(
-                    page_content=chunk,
-                    metadata={
-                        "source": pdf_link['url'], 
-                        "type": "pdf", 
-                        "title": pdf_link['text'],
-                        "description": pdf_link['metadata'].get('description', ''),
-                        "last_updated": pdf_link['metadata'].get('last_updated', '')
-                    }
-                ))
-        pdf_progress.progress((i + 1) / max_pdfs)
-    
-    st.session_state.status = "Creating embeddings and vector store..."
-    
-    # Create the vector store
-    vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
-    
-    # Create BM25 retriever for keyword search
-    texts = [doc.page_content for doc in all_docs]
-    bm25_retriever = BM25Retriever.from_texts(texts)
-    bm25_retriever.k = 5
-    
-    # Create vector store retriever for semantic search
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    
-    # Create ensemble retriever combining both approaches
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[bm25_retriever, vector_retriever],
-        weights=[0.3, 0.7]  # Weight semantic search higher
-    )
-    
-    st.session_state.vector_store = vector_store
-    st.session_state.retriever = ensemble_retriever
-    st.session_state.pdf_links = all_pdf_links
-    st.session_state.status = "System initialized!"
-    st.session_state.initialized = True
+    st.session_state.status = "Creating embeddings"
+    try:
+        # Use our custom embeddings class with offline support
+        embeddings = CustomEmbeddings()
+        
+        st.session_state.status = "Building vector store"
+        vector_store = LangchainFAISS.from_documents(all_docs, embeddings)
+        
+        st.session_state.vector_store = vector_store
+        st.session_state.pdf_links = all_pdf_links
+        st.session_state.status = "System initialized!"
+        st.session_state.initialized = True
+    except Exception as e:
+        st.session_state.status = f"Error during initialization: {str(e)}"
+        logger.error(f"Initialization error: {str(e)}")
+        st.error(f"Error: {str(e)}")
 
 def initialize_llm():
     groq_api_key = st.session_state.groq_api_key
     os.environ["GROQ_API_KEY"] = groq_api_key
     
-    llm = ChatGroq(
-        api_key=groq_api_key,
-        model_name="llama-3.3-70b-versatile"
-    )
-    
-    # Enhanced prompt with better instructions
-    template = """
-    You are an expert assistant specializing in Indian insurance and identity regulatory information from IRDAI and UIDAI websites. Answer the question based on the provided context.
-    
-    Follow these guidelines:
-    1. Focus on extracting factual information directly from the provided context
-    2. When mentioning dates, always include the full date format as it appears in the source
-    3. If referring to regulatory documents, include their reference numbers and publication dates
-    4. When citing information, clearly indicate which specific website the information comes from
-    5. If the question asks about "latest" information, identify the most recent document based on date and explain why it's the most current
-    6. If the context doesn't contain enough information to answer confidently, state this clearly
-    
-    Chat History:
-    {chat_history}
-    
-    Context:
-    {context}
-    
-    Question: {question}
-    
-    Step by step thinking:
-    1. First, identify the key entities and concepts in the question
-    2. Scan the context for relevant information related to these entities
-    3. Analyze any dates to determine chronology and recency
-    4. Verify if the information directly answers the question
-    5. Formulate a precise, factual answer based strictly on the context provided
-    
-    Your answer:
-    """
-    
-    prompt = PromptTemplate(
-        input_variables=["context", "question", "chat_history"],
-        template=template
-    )
-    
-    # Add conversation memory
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True,
-        output_key="result"  # Make sure this matches what your chain returns
-    )
-    
-    # Use RetrievalQA chain with memory integration
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=st.session_state.retriever,
-        return_source_documents=True,
-        chain_type_kwargs={
-            "prompt": prompt,
-            "memory": memory
-        }
-    )
-    
-    st.session_state.qa_chain = qa_chain
-    st.session_state.memory = memory
-
-def get_relevant_context(query):
-    # First get more documents than needed
-    initial_docs = st.session_state.retriever.get_relevant_documents(query)
-    
-    # Then rerank to get the most relevant ones
-    reranked_docs = rerank_documents(query, initial_docs, top_k=5)
-    
-    return reranked_docs
+    try:
+        llm = ChatGroq(
+            api_key=groq_api_key,
+            model_name="llama-4-scout-17b-16e-instruct"
+        )
+        
+        retriever = st.session_state.vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 5}
+        )
+        
+        template = """
+        You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
+        If the information is not available in the context, say so clearly.
+        
+        When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
+        Pay special attention to the "Last Updated" dates and present them in your answer.
+        
+        Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
+        
+        Context:
+        {context}
+        
+        Question: {question}
+        
+        Answer:
+        """
+        
+        prompt = PromptTemplate(
+            template=template,
+            input_variables=["context", "question"]
+        )
+        
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            return_source_documents=True,
+            chain_type_kwargs={"prompt": prompt}
+        )
+        
+        st.session_state.qa_chain = qa_chain
+    except Exception as e:
+        st.error(f"Error initializing LLM: {str(e)}")
+        logger.error(f"LLM initialization error: {str(e)}")
 
 def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    # Use the same neural embeddings for PDF retrieval
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    
-    pdf_texts = []
-    for pdf in pdf_links:
-        context_text = f"{pdf['text']} {pdf['context']}"
-        if 'metadata' in pdf and pdf['metadata']:
-            for key, value in pdf['metadata'].items():
-                context_text += f" {key}: {value}"
-        pdf_texts.append(context_text)
-    
-    # Get embeddings for pdf_texts
-    pdf_embeddings = np.array(model.encode(pdf_texts))
-    
-    # Get query embedding
-    query_embedding = np.array(model.encode([query])[0])
-    query_embedding_np = query_embedding.reshape(1, -1)
-    
-    dimension = pdf_embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(pdf_embeddings)
-    
-    distances, indices = index.search(query_embedding_np, top_k)
-    
-    results = []
-    for idx in indices[0]:
-        if idx < len(pdf_links):
-            results.append(pdf_links[idx])
-    
-    return results
+    try:
+        # Use our custom embeddings for consistency
+        embedder = CustomEmbeddings()
+        query_embedding = embedder.embed_query(query)
+        
+        pdf_texts = []
+        for pdf in pdf_links:
+            context_text = f"{pdf['text']} {pdf['context']}"
+            if 'metadata' in pdf and pdf['metadata']:
+                for key, value in pdf['metadata'].items():
+                    context_text += f" {key}: {value}"
+            pdf_texts.append(context_text)
+        
+        pdf_embeddings = np.array(embedder.embed_documents(pdf_texts))
+        
+        dimension = len(query_embedding)
+        index = faiss.IndexFlatL2(dimension)
+        index.add(pdf_embeddings)
+        
+        distances, indices = index.search(np.array([query_embedding]), top_k)
+        
+        results = []
+        for idx in indices[0]:
+            if idx < len(pdf_links):
+                results.append(pdf_links[idx])
+        
+        return results
+    except Exception as e:
+        logger.error(f"Error finding relevant PDFs: {str(e)}")
+        st.warning(f"Could not find relevant PDFs: {str(e)}")
+        return []
 
-st.title("Web Intelligence BOT")
-
+# Add instructions for offline mode setup
 with st.sidebar:
     st.header("Configuration")
     groq_api_key = st.text_input("Enter Groq API Key", type="password")
@@ -458,12 +451,20 @@ with st.sidebar:
     if groq_api_key:
         st.session_state.groq_api_key = groq_api_key
         
+        st.markdown("### Offline Mode Setup")
+        st.markdown("""
+        If you're experiencing connection issues to Hugging Face, you can use offline mode by:
+        1. Downloading the model manually from [Hugging Face](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+        2. Place the files in the `.model_cache` directory
+        """)
+        
         if st.button("Initialize System") or ('initialized' not in st.session_state):
             st.session_state.initialized = False
             initialize_rag_system()
             if st.session_state.initialized:
                 initialize_llm()
 
+# Main UI
 if 'status' in st.session_state:
     st.info(st.session_state.status)
 
@@ -473,51 +474,44 @@ if 'initialized' in st.session_state and st.session_state.initialized:
     
     if query and st.button("Search"):
         with st.spinner("Searching for information..."):
-            # Get relevant context documents via reranking
-            relevant_docs = get_relevant_context(query)
-            
-            # Process query with conversation chain
-            result = st.session_state.qa_chain({"question": query})
-            
-            # Extract answer and sources
-            if "answer" in result:  # ConversationRetrievalChain format
-                answer = result["answer"]
-            else:  # Fallback for other chain formats
+            try:
+                result = st.session_state.qa_chain({"query": query})
                 answer = result["result"]
+                source_docs = result["source_documents"]
                 
-            source_docs = result["source_documents"] if "source_documents" in result else []
-            
-            # Find relevant PDFs
-            relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
-            
-            st.subheader("Answer")
-            st.write(answer)
-            
-            with st.expander("Sources"):
-                sources = set()
-                for doc in source_docs:
-                    sources.add(doc.metadata["source"])
+                relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
                 
-                for source in sources:
-                    st.write(f"- [{source}]({source})")
-            
-            if relevant_pdfs:
-                st.subheader("Relevant PDF Documents")
-                for pdf in relevant_pdfs:
-                    metadata_text = ""
-                    if 'metadata' in pdf and pdf['metadata']:
-                        for key, value in pdf['metadata'].items():
-                            if value:
-                                metadata_text += f"{key}: {value}, "
-                        metadata_text = metadata_text.rstrip(", ")
+                st.subheader("Answer")
+                st.write(answer)
+                
+                with st.expander("Sources"):
+                    sources = set()
+                    for doc in source_docs:
+                        sources.add(doc.metadata["source"])
                     
-                    st.markdown(f"[{pdf['text']}]({pdf['url']})")
-                    if metadata_text:
-                        st.caption(f"{metadata_text}")
-                    else:
-                        st.caption(f"Context: {pdf['context']}")
-            else:
-                st.info("No specific PDF documents found for this query.")
+                    for source in sources:
+                        st.write(f"- [{source}]({source})")
+                
+                if relevant_pdfs:
+                    st.subheader("Relevant PDF Documents")
+                    for pdf in relevant_pdfs:
+                        metadata_text = ""
+                        if 'metadata' in pdf and pdf['metadata']:
+                            for key, value in pdf['metadata'].items():
+                                if value:
+                                    metadata_text += f"{key}: {value}, "
+                            metadata_text = metadata_text.rstrip(", ")
+                        
+                        st.markdown(f"[{pdf['text']}]({pdf['url']})")
+                        if metadata_text:
+                            st.caption(f"{metadata_text}")
+                        else:
+                            st.caption(f"Context: {pdf['context']}")
+                else:
+                    st.info("No relevant PDF documents found.")
+            except Exception as e:
+                st.error(f"Error processing query: {str(e)}")
+                logger.error(f"Query processing error: {str(e)}")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
