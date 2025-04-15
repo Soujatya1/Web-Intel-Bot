@@ -15,7 +15,8 @@ from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA, ConversationRetrievalChain
+from langchain.chains import RetrievalQA
+from langchain_core.chains import ConversationRetrievalChain
 from langchain.retrievers import BM25Retriever, EnsembleRetriever
 from langchain.memory import ConversationBufferMemory
 
@@ -359,6 +360,9 @@ def initialize_llm():
     5. If the question asks about "latest" information, identify the most recent document based on date and explain why it's the most current
     6. If the context doesn't contain enough information to answer confidently, state this clearly
     
+    Chat History:
+    {chat_history}
+    
     Context:
     {context}
     
@@ -375,26 +379,31 @@ def initialize_llm():
     """
     
     prompt = PromptTemplate(
-        template=template,
-        input_variables=["context", "question"]
+        input_variables=["context", "question", "chat_history"],
+        template=template
     )
     
     # Add conversation memory
     memory = ConversationBufferMemory(
         memory_key="chat_history",
-        return_messages=True
+        return_messages=True,
+        output_key="result"  # Make sure this matches what your chain returns
     )
     
-    # Use ConversationRetrievalChain with memory
-    qa_chain = ConversationRetrievalChain.from_llm(
+    # Use RetrievalQA chain with memory integration
+    qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
+        chain_type="stuff",
         retriever=st.session_state.retriever,
-        memory=memory,
         return_source_documents=True,
-        combine_docs_chain_kwargs={"prompt": prompt}
+        chain_type_kwargs={
+            "prompt": prompt,
+            "memory": memory
+        }
     )
     
     st.session_state.qa_chain = qa_chain
+    st.session_state.memory = memory
 
 def get_relevant_context(query):
     # First get more documents than needed
