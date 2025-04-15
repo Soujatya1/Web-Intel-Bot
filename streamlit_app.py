@@ -12,7 +12,8 @@ from sentence_transformers import SentenceTransformer
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from sklearn.feature_extraction.text import TfidfVectorizer
+from langchain.embeddings.base import Embeddings
 from langchain.vectorstores import FAISS as LangchainFAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import RetrievalQA
@@ -52,7 +53,34 @@ WEBSITES = [
 CACHE_DIR = ".web_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+class TfidfEmbeddings(Embeddings):
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(lowercase=True, stop_words='english')
+        self.fitted = False
+        self.documents = []
+        
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not self.fitted:
+            # First time encountering documents, fit the vectorizer
+            self.vectorizer.fit(texts)
+            self.fitted = True
+            self.documents = texts
+        
+        # Transform documents to TF-IDF vectors
+        tfidf_matrix = self.vectorizer.transform(texts)
+        return tfidf_matrix.toarray().tolist()
+    
+    def embed_query(self, text: str) -> List[float]:
+        # If vectorizer hasn't been fitted yet, return zeros
+        if not self.fitted:
+            vocab_size = 100  # Default size if not fitted
+            return [0.0] * vocab_size
+            
+        # Transform query to TF-IDF vector
+        query_vector = self.vectorizer.transform([text])
+        return query_vector.toarray()[0].tolist()
+
+embeddings = TfidfEmbeddings()
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     
@@ -296,9 +324,8 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
     if not pdf_links:
         return []
     
-    # Use HuggingFaceEmbeddings instead
-    embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    query_embedding = embedder.embed_query(query)
+    # Create TF-IDF embedder
+    embedder = TfidfEmbeddings()
     
     pdf_texts = []
     for pdf in pdf_links:
@@ -308,15 +335,16 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
                 context_text += f" {key}: {value}"
         pdf_texts.append(context_text)
     
-    # Use the embedder to encode all pdf texts
+    # Fit and get embeddings for pdf_texts
     pdf_embeddings = np.array(embedder.embed_documents(pdf_texts))
+    
+    # Get query embedding
+    query_embedding = embedder.embed_query(query)
+    query_embedding_np = np.array([query_embedding])
     
     dimension = pdf_embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
     index.add(pdf_embeddings)
-    
-    # Convert query_embedding to numpy array with correct shape
-    query_embedding_np = np.array([query_embedding])
     
     distances, indices = index.search(query_embedding_np, top_k)
     
