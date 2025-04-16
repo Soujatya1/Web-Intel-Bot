@@ -749,3 +749,159 @@ def initialize_rag_system():
         logger.error(f"Failed to initialize RAG system: {str(e)}")
         st.error(f"Failed to initialize RAG system: {str(e)}")
         progress_bar.progress(1.0)
+# Add the main Streamlit interface code
+def main():
+    st.title("Web Intelligence BOT")
+    
+    # Sidebar for API key and configuration
+    with st.sidebar:
+        st.header("Configuration")
+        api_key = st.text_input("Enter Groq API Key:", type="password")
+        
+        if api_key:
+            os.environ["GROQ_API_KEY"] = api_key
+        
+        st.subheader("Status")
+        status_placeholder = st.empty()
+        
+        # Initialize button
+        if st.button("Initialize/Reset System"):
+            st.session_state.initialized = False
+            st.session_state.conversation_history = []
+            
+            # Clear previous cache if requested
+            if st.checkbox("Clear cache on reset"):
+                try:
+                    shutil.rmtree(CACHE_DIR)
+                    shutil.rmtree(MODEL_CACHE_DIR)
+                    shutil.rmtree(PDF_CACHE_DIR)
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+                    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+                    os.makedirs(PDF_CACHE_DIR, exist_ok=True)
+                    st.success("Cache cleared successfully")
+                except Exception as e:
+                    st.error(f"Error clearing cache: {str(e)}")
+    
+    # Check if system needs initialization
+    if 'initialized' not in st.session_state or not st.session_state.initialized:
+        st.info("Please initialize the system using the button in the sidebar.")
+        
+        # Show status if available
+        if 'status' in st.session_state:
+            status_placeholder.info(st.session_state.status)
+            
+        # Start initialization if API key is provided
+        if api_key and ('status' not in st.session_state or 'failed' in st.session_state.status.lower()):
+            initialize_rag_system()
+        return
+    
+    # Show status in sidebar
+    if 'status' in st.session_state:
+        status_placeholder.success(st.session_state.status)
+    
+    # Initialize LLM if not already done
+    if 'qa_chain' not in st.session_state:
+        try:
+            # Create LLM instance
+            llm = ChatGroq(
+                api_key=api_key,
+                model_name="llama3-70b-8192",  # Use appropriate model
+                temperature=0.2
+            )
+            
+            # Create prompt template
+            prompt_template = """You are an expert regulatory compliance assistant with knowledge about insurance regulations (IRDAI), identity verification (UIDAI/Aadhaar), and anti-money laundering laws (ED/PMLA/FEMA).
+
+            Answer the following question based ONLY on the provided context. Be specific and cite relevant regulations, circulars, or notifications when possible.
+
+            If the information is not present in the context, state clearly that you don't have this information rather than speculating.
+
+            Context: {context}
+
+            Question: {question}
+
+            Chat History: {chat_history}
+
+            Answer:"""
+            
+            PROMPT = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context", "question", "chat_history"]
+            )
+            
+            # Create QA chain
+            st.session_state.qa_chain = create_qa_chain(llm, st.session_state.retriever, PROMPT)
+        except Exception as e:
+            st.error(f"Failed to initialize LLM: {str(e)}")
+            logger.error(f"LLM initialization error: {str(e)}")
+            return
+    
+    # Initialize conversation history if not present
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = []
+    
+    # Display conversation history
+    for i, (question, answer) in enumerate(st.session_state.conversation_history):
+        with st.chat_message("user"):
+            st.write(question)
+        with st.chat_message("assistant"):
+            st.write(answer)
+    
+    # Query input
+    user_query = st.chat_input("Ask about regulations, compliance guidelines, or legal requirements...")
+    
+    if user_query:
+        # Display user question
+        with st.chat_message("user"):
+            st.write(user_query)
+        
+        with st.chat_message("assistant"):
+            response_container = st.empty()
+            response_container.markdown("Thinking...")
+            
+            try:
+                # Process the query
+                processed_query = preprocess_query(user_query)
+                
+                # Find relevant PDFs
+                relevant_pdfs = find_relevant_pdfs(processed_query, st.session_state.pdf_links)
+                
+                # Get answer from QA chain
+                result = st.session_state.qa_chain({"question": processed_query})
+                answer = result["result"]
+                sources = result.get("source_documents", [])
+                
+                # Format answer with sources
+                full_response = f"{answer}\n\n"
+                
+                if sources:
+                    source_urls = set()
+                    for doc in sources:
+                        if 'source' in doc.metadata:
+                            source_urls.add(doc.metadata['source'])
+                    
+                    if source_urls:
+                        full_response += "**Sources:**\n"
+                        for url in source_urls:
+                            full_response += f"- {url}\n"
+                
+                # Add PDF recommendations if available
+                if relevant_pdfs:
+                    full_response += "\n**Relevant Documents:**\n"
+                    for i, pdf in enumerate(relevant_pdfs[:3]):
+                        pdf_title = pdf['text'] if pdf['text'] else "PDF Document"
+                        full_response += f"- [{pdf_title}]({pdf['url']})\n"
+                
+                # Update response
+                response_container.markdown(full_response)
+                
+                # Update conversation history
+                st.session_state.conversation_history.append((user_query, full_response))
+                
+            except Exception as e:
+                response_container.error(f"Error processing query: {str(e)}")
+                logger.error(f"Query processing error: {str(e)}")
+
+# Run the app
+if __name__ == "__main__":
+    main()
