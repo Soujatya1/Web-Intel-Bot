@@ -373,21 +373,23 @@ def initialize_llm():
         )
         
         template = """
-        You are an expert assistant for insurance regulatory information. Answer the question based on the provided context.
-        If the information is not available in the context, say so clearly.
-        
-        When asked about the "latest" acts or documents, focus on the most recently updated ones based on dates in the context.
-        Pay special attention to the "Last Updated" dates and present them in your answer.
-        
-        Include references to the sources of your information. If there are PDF links that might be relevant, mention them.
-        
-        Context:
-        {context}
-        
-        Question: {question}
-        
-        Answer:
-        """
+You are an expert assistant for insurance regulatory information in India with knowledge about IRDAI, UIDAI, and Enforcement Directorate regulations. Answer the question based on the provided context.
+
+CONTEXT:
+{context}
+
+QUESTION: {question}
+
+INSTRUCTIONS:
+1. Answer ONLY based on the information provided in the context.
+2. If the information is not available in the context, say "Based on the provided information, I cannot answer this question."
+3. When mentioning dates, always specify them explicitly (e.g., "as of 15 January 2023").
+4. Provide specific section numbers, regulation names, and exact quotes where possible.
+5. If relevant PDF documents are mentioned in the context, include their details.
+6. Always cite the source websites or documents that your answer is based on.
+
+ANSWER:
+"""
         
         prompt = PromptTemplate(
             template=template,
