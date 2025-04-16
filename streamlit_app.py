@@ -170,120 +170,419 @@ def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
     return combined_text, pdf_links
 
 def extract_table_data(soup, base_url):
+    """
+    Extract and structure data from tables on the webpage with improved context gathering
+    """
     table_data = ""
     
+    # Get page title for additional context
+    page_title = soup.title.get_text().strip() if soup.title else ""
+    if page_title:
+        table_data += f"Page Title: {page_title}\n\n"
+    
+    # Extract header information that might provide context
+    headers = soup.find_all(['h1', 'h2', 'h3'])
+    header_text = "\n".join([h.get_text().strip() for h in headers if h.get_text().strip()])
+    if header_text:
+        table_data += f"Page Headers: {header_text}\n\n"
+    
+    # Extract tables with better structure and error handling
     tables = soup.find_all('table')
     
-    for table in tables:
-        headers = [th.get_text().strip() for th in table.find_all('th')]
-        
-        if any(header in " ".join(headers) for header in ["Archive", "Description", "Last Updated", "Documents"]):
-            table_data += "IRDAI Acts Information:\n"
+    for table_index, table in enumerate(tables):
+        try:
+            # Try to find a caption or heading near the table
+            caption = table.find('caption')
+            caption_text = caption.get_text().strip() if caption else ""
             
-            for row in table.find_all('tr')[1:]:
-                cells = row.find_all(['td', 'th'])
-                if len(cells) >= 4:
-                    archive_status = cells[0].get_text().strip()
-                    description = cells[1].get_text().strip()
-                    last_updated = cells[2].get_text().strip()
+            # Look for preceding headers
+            preceding_header = None
+            current = table
+            while current and current.name != 'body':
+                prev = current.find_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                if prev:
+                    preceding_header = prev.get_text().strip()
+                    break
+                current = current.parent
+            
+            # Add table identifier with any available context
+            table_data += f"\n--- TABLE {table_index + 1}"
+            if caption_text:
+                table_data += f": {caption_text}"
+            elif preceding_header:
+                table_data += f" (Section: {preceding_header})"
+            table_data += " ---\n"
+            
+            # Get headers from the table
+            headers = []
+            thead = table.find('thead')
+            if thead:
+                headers = [th.get_text().strip() for th in thead.find_all('th')]
+            else:
+                # Try getting headers from first row
+                first_row = table.find('tr')
+                if first_row:
+                    headers = [th.get_text().strip() for th in first_row.find_all(['th', 'td'])]
+            
+            # Check if this looks like an IRDAI Acts table
+            is_irdai_table = any(keyword in " ".join(headers).lower() for keyword in 
+                               ["archive", "description", "last updated", "documents", 
+                                "act", "regulation", "circular", "notification"])
+            
+            if is_irdai_table:
+                table_data += "IRDAI Regulatory Information:\n"
+                
+                # Process rows with better structure
+                rows = table.find_all('tr')
+                start_idx = 1 if (thead or len(headers) > 0) else 0
+                
+                for row in rows[start_idx:]:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) < 2:  # Skip rows with insufficient data
+                        continue
                     
+                    # Extract cell data with fallbacks for missing columns
+                    archive_status = cells[0].get_text().strip() if len(cells) > 0 else "N/A"
+                    description = cells[1].get_text().strip() if len(cells) > 1 else "N/A"
+                    last_updated = cells[2].get_text().strip() if len(cells) > 2 else "N/A"
+                    
+                    # Extract document links with full context
                     doc_cell = cells[-1]
                     pdf_links = []
                     for link in doc_cell.find_all('a'):
-                        if link.has_attr('href') and link['href'].lower().endswith('.pdf'):
-                            pdf_url = link['href']
-                            if not pdf_url.startswith(('http://', 'https://')):
-                                pdf_url = urllib.parse.urljoin(base_url, pdf_url)
-                            
-                            file_info = link.get_text().strip()
-                            pdf_links.append(f"{file_info} ({pdf_url})")
+                        if link.has_attr('href'):
+                            href = link['href']
+                            if href.lower().endswith('.pdf'):
+                                pdf_url = href
+                                if not pdf_url.startswith(('http://', 'https://')):
+                                    pdf_url = urllib.parse.urljoin(base_url, pdf_url)
+                                
+                                file_info = link.get_text().strip() or "PDF Document"
+                                pdf_links.append(f"{file_info} ({pdf_url})")
                     
-                    row_data = f"Act: {description}\n"
+                    # Format row data with clear labeling
+                    row_data = f"Document: {description}\n"
                     row_data += f"Status: {archive_status}\n"
                     row_data += f"Last Updated: {last_updated}\n"
                     
                     if pdf_links:
-                        row_data += "Documents: " + ", ".join(pdf_links) + "\n"
+                        row_data += "Related Documents: " + ", ".join(pdf_links) + "\n"
                     
                     table_data += row_data + "\n"
-            
-            table_data += "\nLatest Acts Information:\n"
-            
-            latest_dates = []
-            for row in table.find_all('tr')[1:]:
-                cells = row.find_all(['td', 'th'])
-                if len(cells) >= 3:
-                    date_text = cells[2].get_text().strip()
-                    if re.search(r'\d{2}-\d{2}-\d{4}', date_text):
-                        latest_dates.append((date_text, cells[1].get_text().strip()))
-            
-            if latest_dates:
-                latest_dates.sort(reverse=True)
-                latest_date, latest_act = latest_dates[0]
-                table_data += f"The latest updated Act under IRDAI is {latest_act} with the last updated date as {latest_date}\n"
+                
+                # Extract and highlight the latest acts/regulations
+                table_data += "\nLatest Regulatory Updates:\n"
+                
+                latest_dates = []
+                date_pattern = re.compile(r'\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\w+[\/\-\.]\d{2,4}')
+                
+                for row in rows[start_idx:]:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) < 3:
+                        continue
+                    
+                    date_cell = cells[2].get_text().strip()
+                    if date_pattern.search(date_cell):
+                        latest_dates.append((date_cell, cells[1].get_text().strip()))
+                
+                if latest_dates:
+                    # Sort by date if possible (assuming DD-MM-YYYY format)
+                    try:
+                        # Try various date formats
+                        for i, (date_str, act) in enumerate(latest_dates):
+                            try:
+                                # Try to parse the date using different formats
+                                for fmt in ["%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d-%b-%Y", "%d %b %Y"]:
+                                    try:
+                                        parsed_date = time.strptime(date_str, fmt)
+                                        latest_dates[i] = (parsed_date, act)
+                                        break
+                                    except ValueError:
+                                        continue
+                            except:
+                                # Keep as string if parsing fails
+                                pass
+                        
+                        # Sort based on parsed dates or original strings
+                        latest_dates.sort(reverse=True)
+                        
+                        # Convert back to string representation if needed
+                        formatted_dates = []
+                        for date_info, act in latest_dates:
+                            if isinstance(date_info, time.struct_time):
+                                date_str = time.strftime("%d-%m-%Y", date_info)
+                            else:
+                                date_str = date_info
+                            formatted_dates.append((date_str, act))
+                        
+                        latest_dates = formatted_dates
+                    except:
+                        # If sorting fails, use original data
+                        pass
+                    
+                    # Add latest updates to the table data
+                    for i, (date_str, act) in enumerate(latest_dates[:3]):  # Show top 3 latest
+                        table_data += f"- {act} (Last updated: {date_str})\n"
+            else:
+                # For non-IRDAI specific tables, extract general information
+                table_data += "Table contents:\n"
+                
+                # Get headers
+                if headers:
+                    table_data += " | ".join(headers) + "\n"
+                    table_data += "-" * (sum(len(h) for h in headers) + (3 * (len(headers) - 1))) + "\n"
+                
+                # Get rows
+                rows = table.find_all('tr')
+                start_idx = 1 if (thead or len(headers) > 0) else 0
+                
+                for row in rows[start_idx:]:
+                    cells = row.find_all(['td', 'th'])
+                    if not cells:
+                        continue
+                    
+                    row_data = " | ".join(cell.get_text().strip() for cell in cells)
+                    table_data += row_data + "\n"
+                
+                table_data += "\n"
+        except Exception as e:
+            table_data += f"\nError processing table {table_index + 1}: {str(e)}\n"
+            continue
     
     return table_data
 
 def extract_pdf_links(soup, base_url):
+    """
+    Extract PDF links with comprehensive context and metadata for better relevance matching
+    """
     pdf_links = []
+    processed_urls = set()  # Track processed URLs to avoid duplicates
     
-    tables = soup.find_all('table')
-    for table in tables:
-        rows = table.find_all('tr')
-        for row in rows:
-            cells = row.find_all(['td', 'th'])
+    # Helper function to get the most relevant heading context for an element
+    def get_nearest_header(element):
+        header = None
+        current = element
+        max_depth = 10  # Limit search depth to avoid infinite loops
+        depth = 0
+        
+        while current and current.name != 'body' and depth < max_depth:
+            # Search for the nearest header
+            prev = current.find_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+            if prev:
+                header = prev.get_text().strip()
+                break
+            current = current.parent
+            depth += 1
+        
+        return header or ""
+    
+    # Helper function to get surrounding paragraph text
+    def get_surrounding_text(element, max_chars=200):
+        # Try to find parent paragraph
+        parent_p = element.find_parent('p')
+        if parent_p:
+            return parent_p.get_text().strip()[:max_chars]
+        
+        # Try to find the containing div
+        parent_div = element.find_parent('div')
+        if parent_div:
+            # Get text but exclude nested elements that would create noise
+            text_parts = []
+            for content in parent_div.contents:
+                if isinstance(content, str):
+                    text_parts.append(content.strip())
+                elif getattr(content, 'name', None) not in ['div', 'table', 'ul', 'ol']:
+                    text_parts.append(content.get_text().strip())
             
-            if len(cells) < 3:
+            return " ".join(text_parts)[:max_chars]
+        
+        # If no good container found, get siblings text
+        siblings_text = []
+        for sibling in element.next_siblings:
+            if isinstance(sibling, str):
+                siblings_text.append(sibling.strip())
+            elif getattr(sibling, 'name', None) == 'br':
                 continue
+            elif getattr(sibling, 'name', None) not in ['div', 'table', 'ul', 'ol']:
+                siblings_text.append(sibling.get_text().strip())
+            else:
+                break
+            
+            if len(" ".join(siblings_text)) > max_chars:
+                break
                 
-            try:
-                description = cells[1].get_text().strip() if len(cells) > 1 else ""
-                last_updated = cells[2].get_text().strip() if len(cells) > 2 else ""
-                
-                doc_cell = cells[-1]
-                for link in doc_cell.find_all('a', href=True):
-                    href = link['href']
-                    if href.lower().endswith('.pdf'):
-                        if not href.startswith(('http://', 'https://')):
-                            href = urllib.parse.urljoin(base_url, href)
-                        
-                        link_text = link.get_text().strip()
-                        
-                        context = f"Act: {description}, Last Updated: {last_updated}"
-                        
-                        pdf_links.append({
-                            'url': href,
-                            'text': link_text or description,
-                            'context': context,
-                            'metadata': {
-                                'description': description,
-                                'last_updated': last_updated
-                            }
-                        })
-            except Exception as e:
-                continue
+        return " ".join(siblings_text)[:max_chars]
     
+    # First extract PDFs from tables which often contain the most structured data
+    tables = soup.find_all('table')
+    for table_index, table in enumerate(tables):
+        try:
+            # Get table caption or nearest header for context
+            table_caption = ""
+            caption = table.find('caption')
+            if caption:
+                table_caption = caption.get_text().strip()
+            else:
+                nearest_header = get_nearest_header(table)
+                if nearest_header:
+                    table_caption = nearest_header
+            
+            # Process table rows
+            rows = table.find_all('tr')
+            for row_index, row in enumerate(rows):
+                cells = row.find_all(['td', 'th'])
+                
+                if len(cells) < 3:
+                    continue
+                    
+                try:
+                    # Extract row data for context
+                    row_data = {}
+                    
+                    # Use header cells from first row if available
+                    if row_index == 0 and any(cell.name == 'th' for cell in cells):
+                        continue
+                    
+                    # Create a mapping between possible column positions and their meanings
+                    headers = []
+                    if row_index > 0 and rows[0]:
+                        header_cells = rows[0].find_all(['th', 'td'])
+                        headers = [h.get_text().strip().lower() for h in header_cells]
+                    
+                    # Map columns based on typical IRDAI table structure or headers
+                    for i, cell in enumerate(cells):
+                        cell_text = cell.get_text().strip()
+                        
+                        # Try to identify column by header text if available
+                        if i < len(headers):
+                            header = headers[i]
+                            if any(key in header for key in ["descrip", "title", "name"]):
+                                row_data["description"] = cell_text
+                            elif any(key in header for key in ["date", "updated"]):
+                                row_data["last_updated"] = cell_text
+                            elif any(key in header for key in ["status", "archive"]):
+                                row_data["status"] = cell_text
+                        
+                        # Fallback to position-based mapping
+                        if "description" not in row_data and i == 1:
+                            row_data["description"] = cell_text
+                        if "last_updated" not in row_data and i == 2:
+                            row_data["last_updated"] = cell_text
+                        if "status" not in row_data and i == 0:
+                            row_data["status"] = cell_text
+                    
+                    # Process links in the cells, typically in the last cell
+                    doc_cell = cells[-1]
+                    for link in doc_cell.find_all('a', href=True):
+                        href = link['href']
+                        if href.lower().endswith('.pdf'):
+                            full_url = href
+                            if not full_url.startswith(('http://', 'https://')):
+                                full_url = urllib.parse.urljoin(base_url, href)
+                            
+                            # Skip if we've already processed this URL
+                            if full_url in processed_urls:
+                                continue
+                            
+                            processed_urls.add(full_url)
+                            
+                            # Get link text or fallback to description
+                            link_text = link.get_text().strip()
+                            if not link_text and "description" in row_data:
+                                link_text = row_data["description"]
+                            if not link_text:
+                                link_text = "PDF Document"
+                            
+                            # Build context from row data and table caption
+                            context_parts = []
+                            if table_caption:
+                                context_parts.append(f"Section: {table_caption}")
+                            
+                            for key, value in row_data.items():
+                                if value:
+                                    context_parts.append(f"{key.capitalize()}: {value}")
+                            
+                            context = " | ".join(context_parts)
+                            
+                            # Add the PDF link with rich metadata
+                            pdf_links.append({
+                                'url': full_url,
+                                'text': link_text,
+                                'context': context,
+                                'metadata': {
+                                    'table': f"Table {table_index + 1}",
+                                    'section': table_caption,
+                                    **row_data  # Include all row data as metadata
+                                }
+                            })
+                except Exception as e:
+                    logger.warning(f"Error processing row in table {table_index}: {str(e)}")
+                    continue
+        except Exception as e:
+            logger.warning(f"Error processing table {table_index}: {str(e)}")
+            continue
+    
+    # Then get PDFs from general links
     for link in soup.find_all('a', href=True):
         href = link['href']
         if href.lower().endswith('.pdf'):
-            if any(pdf['url'] == href for pdf in pdf_links):
+            full_url = href
+            if not full_url.startswith(('http://', 'https://')):
+                full_url = urllib.parse.urljoin(base_url, href)
+            
+            # Skip if we've already processed this URL
+            if full_url in processed_urls:
                 continue
-                
-            if not href.startswith(('http://', 'https://')):
-                href = urllib.parse.urljoin(base_url, href)
             
-            surrounding_text = link.get_text() or "PDF Document"
-            parent_text = ""
-            parent = link.parent
-            if parent:
-                parent_text = parent.get_text() or ""
+            processed_urls.add(full_url)
             
+            # Get link text
+            link_text = link.get_text().strip() or "PDF Document"
+            
+            # Get section context
+            section_header = get_nearest_header(link)
+            
+            # Get surrounding text
+            surrounding_text = get_surrounding_text(link)
+            
+            # Try to find a date near the link
+            date_pattern = re.compile(r'\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\/\-\.]\w+[\/\-\.]\d{2,4}')
+            date_match = date_pattern.search(surrounding_text)
+            date_str = date_match.group(0) if date_match else ""
+            
+            # Try to find if this is an act, regulation, circular, etc.
+            doc_type = ""
+            for doc_keyword in ["Act", "Regulation", "Circular", "Notification", "Guidelines", "Master Circular"]:
+                if doc_keyword.lower() in link_text.lower() or doc_keyword.lower() in surrounding_text.lower():
+                    doc_type = doc_keyword
+                    break
+            
+            # Build a context string that combines all the information
+            context = ""
+            if section_header:
+                context += f"Section: {section_header}"
+            if doc_type:
+                context += f" | Type: {doc_type}"
+            if date_str:
+                context += f" | Date: {date_str}"
+            if surrounding_text:
+                context += f" | Context: {surrounding_text[:100]}..."
+            
+            # Add to PDF links with rich metadata
             pdf_links.append({
-                'url': href,
-                'text': surrounding_text,
-                'context': parent_text[:100],
-                'metadata': {}
+                'url': full_url,
+                'text': link_text,
+                'context': context,
+                'metadata': {
+                    'section': section_header,
+                    'document_type': doc_type,
+                    'date': date_str,
+                    'surrounding_text': surrounding_text
+                }
             })
+    
+    # Sort PDFs by relevance: prioritize those with more metadata
+    pdf_links.sort(key=lambda x: sum(1 for v in x['metadata'].values() if v), reverse=True)
     
     return pdf_links
 
@@ -299,8 +598,8 @@ def initialize_rag_system():
         content, pdf_links = fetch_website_content(website)
         
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50
+            chunk_size=800,
+            chunk_overlap=150
         )
         
         if content and not content.startswith("Error"):
@@ -343,7 +642,9 @@ def initialize_llm():
         
         retriever = st.session_state.vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 5}
+            search_kwargs={"k": 5,
+                          "fetch_k: 20,
+                          "lanbd_mult": 0.7}
         )
         
         template = """
@@ -355,12 +656,15 @@ CONTEXT:
 QUESTION: {question}
 
 INSTRUCTIONS:
-1. Answer ONLY based on the information provided in the context.
-2. If the information is not available in the context, say "Based on the provided information, I cannot answer this question."
-3. When mentioning dates, always specify them explicitly (e.g., "as of 15 January 2023").
-4. Provide specific section numbers, regulation names, and exact quotes where possible.
-5. If relevant PDF documents are mentioned in the context, include their details.
-6. Always cite the source websites or documents that your answer is based on.
+1. Answer ONLY based on the information provided in the context above.
+2. If the information is not available or unclear in the context, explicitly say "Based on the provided information, I cannot answer this question" or "The context does not provide sufficient information about this."
+3. Always specify dates explicitly (e.g., "as of 15 January 2023") when mentioning time-sensitive information.
+4. When relevant, cite specific section numbers, regulation names, and direct quotes from the context.
+5. If PDF documents are mentioned in the context, highlight their relevance to the answer.
+6. Begin your answer by mentioning which sources from the context contain the information you're using.
+7. Do not speculate beyond what's in the context, even if you think you know the answer.
+8. Focus on the most recent information when dates are provided in the context.
+9. Use bullet points for clarity when listing multiple items or requirements.
 
 ANSWER:
 """
@@ -383,21 +687,22 @@ ANSWER:
         st.error(f"Error initializing LLM: {str(e)}")
         logger.error(f"LLM initialization error: {str(e)}")
 
-def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
+def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 5):
     if not pdf_links:
         return []
     
     try:
-        # Use our custom embeddings for consistency
+        # Semantic search with embeddings
         embedder = CustomEmbeddings()
         query_embedding = embedder.embed_query(query)
         
         pdf_texts = []
         for pdf in pdf_links:
-            context_text = f"{pdf['text']} {pdf['context']}"
+            context_text = f"{pdf['text']} {pdf.get('context', '')}"
             if 'metadata' in pdf and pdf['metadata']:
                 for key, value in pdf['metadata'].items():
-                    context_text += f" {key}: {value}"
+                    if value:
+                        context_text += f" {key}: {value}"
             pdf_texts.append(context_text)
         
         pdf_embeddings = np.array(embedder.embed_documents(pdf_texts))
@@ -408,10 +713,42 @@ def find_relevant_pdfs(query: str, pdf_links: List[Dict], top_k: int = 3):
         
         distances, indices = index.search(np.array([query_embedding]), top_k)
         
-        results = []
-        for idx in indices[0]:
+        # Also perform keyword matching
+        query_terms = set(query.lower().split())
+        keyword_scores = []
+        
+        for i, pdf in enumerate(pdf_links):
+            pdf_text = f"{pdf['text']} {pdf.get('context', '')}"
+            if 'metadata' in pdf and pdf['metadata']:
+                for k, v in pdf['metadata'].items():
+                    if v:
+                        pdf_text += f" {k}: {v}"
+            
+            pdf_text = pdf_text.lower()
+            matches = sum(1 for term in query_terms if term in pdf_text)
+            keyword_scores.append(matches / len(query_terms) if query_terms else 0)
+        
+        # Combine semantic and keyword results (hybrid approach)
+        combined_results = {}
+        
+        # Add semantic search results
+        for rank, idx in enumerate(indices[0]):
             if idx < len(pdf_links):
-                results.append(pdf_links[idx])
+                combined_results[idx] = 0.7 * (1 / (rank + 1))  # Higher rank = better score
+        
+        # Add keyword results
+        for idx, score in enumerate(keyword_scores):
+            if idx in combined_results:
+                combined_results[idx] += 0.3 * score
+            elif score > 0:
+                combined_results[idx] = 0.3 * score
+        
+        # Sort by combined score
+        sorted_results = sorted(combined_results.items(), key=lambda x: x[1], reverse=True)
+        
+        results = []
+        for idx, _ in sorted_results[:top_k]:
+            results.append(pdf_links[idx])
         
         return results
     except Exception as e:
