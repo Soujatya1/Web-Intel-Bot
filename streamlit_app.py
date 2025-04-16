@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 WEBSITES = [
     "https://irdai.gov.in/rules",
     "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-    "https://irdai.gov.in/updated-regulations",
+    
     "https://irdai.gov.in/notifications",
     "https://irdai.gov.in/circulars",
     "https://irdai.gov.in/orders1",
