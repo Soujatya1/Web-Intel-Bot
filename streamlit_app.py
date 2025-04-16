@@ -643,7 +643,7 @@ def initialize_llm():
         retriever = st.session_state.vector_store.as_retriever(
             search_type="similarity",
             search_kwargs={"k": 5,
-                          "fetch_k: 20,
+                          "fetch_k": 20,
                           "lanbd_mult": 0.7}
         )
         
