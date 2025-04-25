@@ -954,39 +954,40 @@ if 'initialized' in st.session_state and st.session_state.initialized:
     query = st.text_input("What would you like to know?")
     
     if query and st.button("Search"):
-                answer, source_docs, relevant_pdfs = process_query(query)
+        try:
+            answer, source_docs, relevant_pdfs = process_query(query)
     
-                st.subheader("Answer")
-                st.write(answer)
+            st.subheader("Answer")
+            st.write(answer)
     
-                with st.expander("Sources"):
-                    sources = set()
-                    for doc in source_docs:
-                        sources.add(doc.metadata["source"])
+            with st.expander("Sources"):
+                sources = set()
+                for doc in source_docs:
+                    sources.add(doc.metadata["source"])
+    
+                for source in sources:
+                    st.write(f"- [{source}]({source})")
+    
+            if relevant_pdfs:
+                st.subheader("Relevant PDF Documents")
+                for pdf in relevant_pdfs:
+                    metadata_text = ""
+                    if 'metadata' in pdf and pdf['metadata']:
+                        for key, value in pdf['metadata'].items():
+                            if value:
+                                metadata_text += f"{key}: {value}, "
+                        metadata_text = metadata_text.rstrip(", ")
         
-                    for source in sources:
-                        st.write(f"- [{source}]({source})")
-    
-                if relevant_pdfs:
-                    st.subheader("Relevant PDF Documents")
-                    for pdf in relevant_pdfs:
-                        metadata_text = ""
-                        if 'metadata' in pdf and pdf['metadata']:
-                            for key, value in pdf['metadata'].items():
-                                if value:
-                                    metadata_text += f"{key}: {value}, "
-                            metadata_text = metadata_text.rstrip(", ")
-            
-                        st.markdown(f"[{pdf['text']}]({pdf['url']})")
-                        if metadata_text:
-                            st.caption(f"{metadata_text}")
-                        else:
-                            st.caption(f"Context: {pdf['context']}")
-                else:
-                    st.info("No relevant PDF documents found.")
-            except Exception as e:
-                st.error(f"Error processing query: {str(e)}")
-                logger.error(f"Query processing error: {str(e)}")
+                    st.markdown(f"[{pdf['text']}]({pdf['url']})")
+                    if metadata_text:
+                        st.caption(f"{metadata_text}")
+                    else:
+                        st.caption(f"Context: {pdf['context']}")
+            else:
+                st.info("No relevant PDF documents found.")
+        except Exception as e:
+            st.error(f"Error processing query: {str(e)}")
+            logger.error(f"Query processing error: {str(e)}")
 else:
     if 'initialized' not in st.session_state:
         st.info("Please enter your Groq API key and initialize the system.")
