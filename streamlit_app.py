@@ -46,13 +46,30 @@ class CustomEmbeddings(Embeddings):
         
     def initialize_model(self):
         try:
-            # Try to import and use SentenceTransformer
-            from sentence_transformers import SentenceTransformer
-            
+            # IMPROVED: Try to use a better model if available
             try:
-                # First try using the local cache
-                self.model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=self.cache_folder)
-                logger.info("Successfully loaded model from cache")
+                from sentence_transformers import SentenceTransformer
+                
+                # Try different models in order of preference
+                model_options = [
+                    "intfloat/e5-large",  # Better for queries
+                    "all-mpnet-base-v2",   # Better than MiniLM
+                    "all-MiniLM-L6-v2"     # Fallback
+                ]
+                
+                for model_name in model_options:
+                    try:
+                        logger.info(f"Attempting to load model {model_name}")
+                        self.model = SentenceTransformer(model_name, cache_folder=self.cache_folder)
+                        logger.info(f"Successfully loaded model {model_name}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to load {model_name}: {str(e)}")
+                        continue
+                        
+                if self.model is None:
+                    raise ValueError("Could not load any embedding model")
+                    
             except Exception as e:
                 logger.warning(f"Could not load model from cache: {str(e)}")
                 # If that fails, try downloading with retries
@@ -80,26 +97,38 @@ class CustomEmbeddings(Embeddings):
             st.error(f"Failed to initialize embeddings model: {str(e)}")
             raise
     
+    # IMPROVED: Different encoding approach for queries vs. documents
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         if self.model is None:
             raise ValueError("Model not initialized")
         try:
-            embeddings = self.model.encode(texts)
+            # Use batch encoding with appropriate parameters
+            embeddings = self.model.encode(
+                texts,
+                batch_size=32,
+                show_progress_bar=False,
+                convert_to_tensor=True,
+                normalize_embeddings=True  # Important for similarity search
+            )
             return embeddings.tolist()
         except Exception as e:
             logger.error(f"Error encoding documents: {str(e)}")
-            # Fall back to simple embeddings if model fails
             return self._fallback_embeddings(texts)
     
     def embed_query(self, text: str) -> List[float]:
         if self.model is None:
             raise ValueError("Model not initialized")
         try:
-            embedding = self.model.encode([text])[0]
+            # Use query mode if available (works with E5 models)
+            if hasattr(self.model, "encode_queries"):
+                embedding = self.model.encode_queries([text])[0]
+            else:
+                # Add a query prefix for better retrieval (helps with some models)
+                query_text = f"query: {text}" if not text.startswith("query:") else text
+                embedding = self.model.encode([query_text])[0]
             return embedding.tolist()
         except Exception as e:
             logger.error(f"Error encoding query: {str(e)}")
-            # Fall back to simple embeddings if model fails
             return self._fallback_embeddings([text])[0]
     
     def _fallback_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -132,38 +161,84 @@ class CustomEmbeddings(Embeddings):
         return results
 
 def fetch_website_content(url: str) -> Tuple[str, List[Dict]]:
-    
     cache_file = os.path.join(CACHE_DIR, urllib.parse.quote_plus(url))
     if os.path.exists(cache_file):
         with open(cache_file, 'r', encoding='utf-8') as f:
             content = f.read()
     else:
         try:
+            # IMPROVED: Better web scraping with headers and timeout
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.google.com/',
+                'Connection': 'keep-alive'
             }
-            response = requests.get(url, headers=headers, timeout=10)
+            
+            # Use session to handle cookies
+            session = requests.Session()
+            response = session.get(url, headers=headers, timeout=15)
             content = response.text
             
             # Cache the content
             with open(cache_file, 'w', encoding='utf-8') as f:
                 f.write(content)
+                
+            # IMPROVED: Check for JavaScript-rendered content
+            if len(content) < 5000 and ('JavaScript' in content or 'javascript' in content):
+                logger.warning(f"The page {url} might require JavaScript rendering")
+                st.warning(f"Limited content extracted from {url}. The page might require JavaScript.")
+                
         except Exception as e:
             logger.error(f"Error fetching {url}: {str(e)}")
             return f"Error fetching {url}: {str(e)}", []
     
     soup = BeautifulSoup(content, 'html.parser')
     
+    # IMPROVED: Extract meta information
+    meta_info = ""
+    meta_tags = soup.find_all('meta')
+    for meta in meta_tags:
+        if meta.get('name') in ['description', 'keywords'] and meta.get('content'):
+            meta_info += f"{meta.get('name')}: {meta.get('content')}\n"
+    
+    # IMPROVED: Better extraction of main content
+    main_content = ""
+    
+    # Try to identify main content containers
+    main_containers = soup.select('main, article, #content, .content, #main, .main')
+    if main_containers:
+        for container in main_containers:
+            container_text = container.get_text(separator="\n")
+            if len(container_text) > len(main_content):
+                main_content = container_text
+    
+    # Extract navigation for structure information
+    nav_links = []
+    for nav in soup.select('nav, .nav, #navigation, .navigation'):
+        for link in nav.find_all('a'):
+            if link.get_text().strip() and link.get('href'):
+                nav_links.append(f"{link.get_text().strip()} ({link.get('href')})")
+    
+    nav_info = "\nNavigation Structure:\n" + "\n".join(nav_links) if nav_links else ""
+    
+    # Remove scripts and styles
     for script in soup(["script", "style"]):
         script.extract()
     
     table_data = extract_table_data(soup, url)
     
-    text = soup.get_text(separator="\n")
-    text = re.sub(r'\n+', '\n', text)
-    text = re.sub(r'\s+', ' ', text)
+    # Use main content if identified, otherwise fallback to whole page
+    if main_content:
+        text = meta_info + "\n\n" + main_content
+    else:
+        text = soup.get_text(separator="\n")
+        text = re.sub(r'\n+', '\n', text)
+        text = re.sub(r'\s+', ' ', text)
+        text = meta_info + "\n\n" + text
     
-    combined_text = text + "\n\n" + table_data
+    combined_text = text + "\n\n" + table_data + nav_info
     
     pdf_links = extract_pdf_links(soup, url)
     
@@ -597,17 +672,30 @@ def initialize_rag_system():
         st.session_state.status = f"Processing {website}..."
         content, pdf_links = fetch_website_content(website)
         
+        # IMPROVED: Better chunking strategy with headers preserved
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=150
+            chunk_size=1000,  # Increased from 800
+            chunk_overlap=200,  # Increased from 150
+            separators=["\n\n", "\n", ". ", " ", ""],
+            keep_separator=True
         )
         
         if content and not content.startswith("Error"):
+            # IMPROVED: Extract and preserve headers for better context
+            headers = re.findall(r'((?:^|\n)#{1,6}\s+.+?)(?=\n|$)', content)
+            header_context = " | ".join(headers) if headers else ""
+            
             chunks = text_splitter.split_text(content)
             for chunk in chunks:
+                # IMPROVED: Add header context to each chunk
+                metadata = {
+                    "source": website,
+                    "header_context": header_context[:500],  # Limit size but preserve context
+                    "domain": urllib.parse.urlparse(website).netloc,  # Add domain info
+                }
                 all_docs.append(Document(
                     page_content=chunk,
-                    metadata={"source": website}
+                    metadata=metadata
                 ))
             all_pdf_links.extend(pdf_links)
         
@@ -640,15 +728,45 @@ def initialize_llm():
             model_name="llama-3.3-70b-versatile"
         )
         
+        # IMPROVED: Enhanced retrieval with better parameters
         retriever = st.session_state.vector_store.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5,
-                          "fetch_k": 20,
-                          "lanbd_mult": 0.7}
+            search_type="mmr",  # Change to Maximum Marginal Relevance for better diversity
+            search_kwargs={
+                "k": 10,  # Increased from 5
+                "fetch_k": 30,  # Increased from 20
+                "lambda_mult": 0.7,  # Fixed typo from 'lanbd_mult'
+                "filter": None  # Allow filtering by metadata if needed
+            }
         )
         
+        # IMPROVED: Add a reranking step
+        def rerank_results(query, docs):
+            # Simple BM25-style reranking based on term frequency
+            query_terms = set(query.lower().split())
+            scored_docs = []
+            
+            for doc in docs:
+                # Calculate term frequency score
+                content = doc.page_content.lower()
+                score = sum(content.count(term) for term in query_terms)
+                
+                # Bonus for domain matches
+                if 'domain' in doc.metadata:
+                    domain = doc.metadata['domain']
+                    if any(domain in term for term in query_terms):
+                        score += 5
+                        
+                scored_docs.append((doc, score))
+            
+            # Sort by score
+            sorted_docs = [doc for doc, _ in sorted(scored_docs, key=lambda x: x[1], reverse=True)]
+            return sorted_docs[:7]  # Return top 7 after reranking
+        
+        # Add reranker to session state
+        st.session_state.reranker = rerank_results
+        
         template = """
-You are an expert assistant for insurance regulatory information in India with knowledge about IRDAI, UIDAI, and Enforcement Directorate regulations. Answer the question based on the provided context.
+You are a specialized assistant focused on Indian insurance and regulatory information from IRDAI, UIDAI, and Enforcement Directorate. You have expertise in interpreting regulatory documents, circulars, notifications, and legal frameworks.
 
 CONTEXT:
 {context}
@@ -656,15 +774,23 @@ CONTEXT:
 QUESTION: {question}
 
 INSTRUCTIONS:
-1. Answer ONLY based on the information provided in the context above.
-2. If the information is not available or unclear in the context, explicitly say "Based on the provided information, I cannot answer this question" or "The context does not provide sufficient information about this."
-3. Always specify dates explicitly (e.g., "as of 15 January 2023") when mentioning time-sensitive information.
-4. When relevant, cite specific section numbers, regulation names, and direct quotes from the context.
-5. If PDF documents are mentioned in the context, highlight their relevance to the answer.
-6. Begin your answer by mentioning which sources from the context contain the information you're using.
-7. Do not speculate beyond what's in the context, even if you think you know the answer.
-8. Focus on the most recent information when dates are provided in the context.
-9. Use bullet points for clarity when listing multiple items or requirements.
+1. ONLY answer based on the information provided in the context above.
+2. Insurance and regulatory questions require precise answers. If information is not in the context, state clearly: "Based on the provided regulatory information, I cannot answer this specific question."
+3. For regulatory information, ALWAYS include:
+   - Specific regulation/circular/notification numbers
+   - Exact dates when provisions came into effect
+   - Relevant sections and clauses
+   - Direct quotes from regulations when available
+4. Format your answer in a structured manner:
+   - Start with the most relevant regulation/document
+   - Quote the exact section that answers the question
+   - Explain the implications in simple terms
+5. If multiple documents address the question, compare their provisions chronologically.
+6. For PDF references, explicitly state which document contains the complete information.
+7. Use bullet points for listing requirements or compliance points.
+8. For time-sensitive regulations, specify if they are current, amended, or superseded based on the context.
+9. If the query relates to penalties or compliance, be explicit about the consequences mentioned in the regulations.
+10. AVOID speculating beyond the regulatory content provided.
 
 ANSWER:
 """
@@ -777,6 +903,48 @@ with st.sidebar:
             if st.session_state.initialized:
                 initialize_llm()
 
+def process_query(query):
+    with st.spinner("Searching for information..."):
+        try:
+            # IMPROVED: First get relevant docs through vector store
+            if hasattr(st.session_state, 'reranker'):
+                # Get initial results
+                raw_docs = st.session_state.vector_store.similarity_search(
+                    query, k=15, fetch_k=30
+                )
+                # Apply reranking
+                source_docs = st.session_state.reranker(query, raw_docs)
+            else:
+                source_docs = st.session_state.vector_store.similarity_search(query, k=7)
+            
+            # IMPROVED: Find relevant PDFs
+            relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
+            
+            # IMPROVED: Integrate PDF metadata into context
+            pdf_context = ""
+            if relevant_pdfs:
+                pdf_context = "\nRelevant PDF Documents:\n"
+                for pdf in relevant_pdfs[:3]:  # Include top 3 PDFs in context
+                    pdf_context += f"- {pdf['text']}: {pdf['url']}\n"
+                    if 'context' in pdf:
+                        pdf_context += f"  Context: {pdf['context']}\n"
+            
+            # Combine document content with PDF context
+            context = "\n\n".join([doc.page_content for doc in source_docs])
+            if pdf_context:
+                context += "\n\n" + pdf_context
+            
+            # Generate answer using the enhanced context
+            result = st.session_state.qa_chain({"query": query, "context": context})
+            answer = result["result"]
+            
+            return answer, source_docs, relevant_pdfs
+            
+        except Exception as e:
+            st.error(f"Error processing query: {str(e)}")
+            logger.error(f"Query processing error: {str(e)}")
+            return f"Error: {str(e)}", [], []
+
 # Main UI
 if 'status' in st.session_state:
     st.info(st.session_state.status)
@@ -786,25 +954,19 @@ if 'initialized' in st.session_state and st.session_state.initialized:
     query = st.text_input("What would you like to know?")
     
     if query and st.button("Search"):
-        with st.spinner("Searching for information..."):
-            try:
-                result = st.session_state.qa_chain({"query": query})
-                answer = result["result"]
-                source_docs = result["source_documents"]
-                
-                relevant_pdfs = find_relevant_pdfs(query, st.session_state.pdf_links)
-                
+                answer, source_docs, relevant_pdfs = process_query(query)
+    
                 st.subheader("Answer")
                 st.write(answer)
-                
+    
                 with st.expander("Sources"):
                     sources = set()
                     for doc in source_docs:
                         sources.add(doc.metadata["source"])
-                    
+        
                     for source in sources:
                         st.write(f"- [{source}]({source})")
-                
+    
                 if relevant_pdfs:
                     st.subheader("Relevant PDF Documents")
                     for pdf in relevant_pdfs:
@@ -814,7 +976,7 @@ if 'initialized' in st.session_state and st.session_state.initialized:
                                 if value:
                                     metadata_text += f"{key}: {value}, "
                             metadata_text = metadata_text.rstrip(", ")
-                        
+            
                         st.markdown(f"[{pdf['text']}]({pdf['url']})")
                         if metadata_text:
                             st.caption(f"{metadata_text}")
