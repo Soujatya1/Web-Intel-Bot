@@ -14,10 +14,7 @@ if "loaded_content" not in st.session_state:
 
 # Hardcoded websites
 websites = [
-    "https://irdai.gov.in/",
-    "https://egazette.gov.in/",
-    "https://enforcementdirectorate.gov.in/pmla",
-    "https://uidai.gov.in/"
+    "https://irdai.gov.in/acts"
 ]
 
 # Function to load website content
