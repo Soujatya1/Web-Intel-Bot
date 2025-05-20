@@ -1,297 +1,218 @@
 import streamlit as st
-import time
-import re
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from bs4 import BeautifulSoup
+from langchain.embeddings import HuggingFaceEmbeddings
+import pandas as pd
 
-# Streamlit UI
-st.title("Website Intelligence")
+st.title("Document GeN-ie")
+st.subheader("Chat with web content")
 
-# Initialize session state variables
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-
-# Hardcoded websites
-websites = [
-    "https://irdai.gov.in/acts",
-    "https://irdai.gov.in/rules",
-    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-    "https://irdai.gov.in/notifications",
-    "https://irdai.gov.in/circulars",
-    "https://irdai.gov.in/orders1",
-    "https://irdai.gov.in/exposure-drafts",
-    "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-    "https://irdai.gov.in/cic-orders",
-    "https://irdai.gov.in/antimoney-laundering",
-    "https://irdai.gov.in/other-communication",
-    "https://irdai.gov.in/directory-of-employees",
-    "https://irdai.gov.in/warnings-and-penalties"
+# List of hardcoded websites to scrape
+WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules", "https://irdai.gov.in/consolidated-gazette-notified-regulations", "https://irdai.gov.in/notifications","https://irdai.gov.in/circulars","https://irdai.gov.in/orders1","https://irdai.gov.in/exposure-drafts","https://irdai.gov.in/programmes-to-advance-understanding-of-rti","https://irdai.gov.in/cic-orders","https://irdai.gov.in/antimoney-laundering","https://irdai.gov.in/other-communication","https://irdai.gov.in/directory-of-employees","https://irdai.gov.in/warnings-and-penalties",
+            "https://uidai.gov.in/en/","https://uidai.gov.in/en/about-uidai/legal-framework.html","https://uidai.gov.in/en/about-uidai/legal-framework/rules.html","https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html","https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html","https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html","https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html","https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation","https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules","https://enforcementdirectorate.gov.in/pmla","https://enforcementdirectorate.gov.in/fema","https://enforcementdirectorate.gov.in/bns","https://enforcementdirectorate.gov.in/bnss","https://enforcementdirectorate.gov.in/bsa"
 ]
 
-# Custom loader to extract better content from websites
-class EnhancedWebLoader(WebBaseLoader):
-    def load(self):
-        docs = super().load()
-        enhanced_docs = []
-        
-        for doc in docs:
-            # Extract the text content
-            content = doc.page_content
-            source_url = doc.metadata.get("source", "")
-            
-            # Parse with BeautifulSoup to better extract text and links
-            soup = BeautifulSoup(content, 'html.parser')
-            
-            # Extract all links for later reference
-            links = {}
-            for a_tag in soup.find_all('a', href=True):
-                link_text = a_tag.get_text().strip()
-                href = a_tag['href']
-                if link_text and href:
-                    # Make relative URLs absolute
-                    if href.startswith('/'):
-                        base_url = '/'.join(source_url.split('/')[:3])  # Get domain part
-                        href = base_url + href
-                    links[link_text] = href
-            
-            # Extract text content with better formatting
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.extract()
-                
-            # Get text
-            clean_text = soup.get_text(separator=' ', strip=True)
-            
-            # Remove extra whitespace
-            clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-            
-            # Create a new document with enhanced metadata
-            enhanced_doc = doc
-            enhanced_doc.page_content = clean_text
-            enhanced_doc.metadata.update({
-                "source": source_url,
-                "links": links,
-                "title": soup.title.string if soup.title else "No Title"
-            })
-            
-            enhanced_docs.append(enhanced_doc)
-            
-        return enhanced_docs
+template = """
+You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
+Also answer situation-based questions derived from the context as per the question.
 
-# Function to create vector store from websites
-def load_websites_to_vectorstore():
-    all_docs = []
-    loaded_sites = 0
+The content may contain tables. Tables are formatted as CSV data and preceded by [TABLE] markers.
+
+Question: {question} 
+Context: {context} 
+Answer:
+"""
+
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+vector_store = InMemoryVectorStore(embeddings)
+model = ChatGroq(groq_api_key="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", model_name="llama-3.3-70b-versatile", temperature=0.3)
+
+def extract_tables_from_html(html_content, source_url):
+    """Extract tables from HTML content and convert to structured format"""
+    import pandas as pd
+    from bs4 import BeautifulSoup
     
-    # Initialize text splitter with smaller chunks and more overlap for better context
+    # Initialize a list to store all text and tables
+    document_content = []
+    
+    # Parse HTML content
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Extract tables
+    tables = soup.find_all('table')
+    for table_num, table in enumerate(tables):
+        try:
+            # Use pandas to extract table data
+            dfs = pd.read_html(str(table))
+            for df_num, df in enumerate(dfs):
+                # Convert to CSV string
+                csv_string = df.to_csv(index=False)
+                
+                # Add the table as a special content type
+                table_content = f"[TABLE] Table {table_num+1}.{df_num+1} from {source_url}:\n{csv_string}"
+                document_content.append({
+                    "content": table_content,
+                    "source": source_url,
+                    "type": "table"
+                })
+        except Exception as e:
+            st.error(f"Error extracting table {table_num} from {source_url}: {str(e)}")
+    
+    return document_content
+
+def load_website(url):
+    """Load content from a website URL"""
+    try:
+        # Use LangChain's WebBaseLoader to get the content
+        loader = WebBaseLoader(url)
+        documents = loader.load()
+        
+        # Extract the HTML for table processing
+        raw_html = documents[0].metadata.get('html', '')
+        
+        # Extract tables separately
+        table_documents = extract_tables_from_html(raw_html, url)
+        
+        # Convert table documents to LangChain document format
+        from langchain_core.documents import Document
+        table_docs = []
+        
+        for item in table_documents:
+            # Create a document with the content and metadata
+            doc = Document(
+                page_content=item["content"],
+                metadata={
+                    "source": item["source"],
+                    "type": item["type"]
+                }
+            )
+            table_docs.append(doc)
+        
+        # Combine with the original web content
+        all_documents = documents + table_docs
+        return all_documents, url
+    
+    except Exception as e:
+        st.error(f"Error loading content from {url}: {str(e)}")
+        return [], url
+
+def split_text(documents):
+    """Split documents into chunks while preserving tables"""
+    # Use a splitter that respects table boundaries
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=300,
-        separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-        keep_separator=True
+        chunk_size=1000,
+        chunk_overlap=200,
+        add_start_index=True,
+        separators=["\n\n", "\n", " ", ""]
     )
     
-    progress_bar = st.progress(0)
+    # Process text and table documents differently
+    split_docs = []
+    for doc in documents:
+        # Keep tables intact (don't split)
+        if doc.metadata.get("type") == "table":
+            split_docs.append(doc)
+        else:
+            # Split text documents
+            split_docs.extend(text_splitter.split_documents([doc]))
     
-    for idx, website in enumerate(websites):
-        try:
-            status_placeholder = st.empty()
-            status_placeholder.write(f"Fetching content from: {website}")
+    return split_docs
+
+def index_docs(documents):
+    """Add documents to the vector store"""
+    vector_store.add_documents(documents)
+
+def retrieve_docs(query):
+    """Retrieve relevant documents based on query"""
+    return vector_store.similarity_search(query)
+
+def answer_question(question, documents):
+    """Generate an answer based on retrieved documents"""
+    context = "\n\n".join([doc.page_content for doc in documents])
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | model
+    
+    response = chain.invoke({"question": question, "context": context})
+    
+    return response.content
+
+# Initialize session state
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+if "documents_loaded" not in st.session_state:
+    st.session_state.documents_loaded = False
+
+# Display loading status or control loading
+if not st.session_state.documents_loaded:
+    if st.button("Load Website Content"):
+        # Show progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        all_documents = []
+        successfully_loaded = []
+        
+        # Process each website
+        for i, website in enumerate(WEBSITES):
+            status_text.text(f"Processing {website}...")
+            documents, url = load_website(website)
             
-            # Load documents with enhanced loader
-            loader = EnhancedWebLoader(website)
-            docs = loader.load()
-            
-            # Split documents into chunks
-            split_docs = text_splitter.split_documents(docs)
-            all_docs.extend(split_docs)
-            loaded_sites += 1
+            if documents:
+                chunked_documents = split_text(documents)
+                all_documents.extend(chunked_documents)
+                successfully_loaded.append(url)
             
             # Update progress
-            progress_bar.progress((idx + 1) / len(websites))
-            status_placeholder.write(f"✅ Loaded: {website}")
+            progress_bar.progress((i + 1) / len(WEBSITES))
+        
+        # Index all documents
+        if all_documents:
+            index_docs(all_documents)
+            st.session_state.documents_loaded = True
             
-        except Exception as e:
-            st.write(f"❌ Error loading {website}: {e}")
-    
-    # Initialize embeddings - using a more powerful model
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2"
-    )
-    
-    # Create FAISS vector store
-    st.write("Creating vector embeddings and FAISS index...")
-    vector_store = FAISS.from_documents(all_docs, embeddings)
-    st.session_state.vector_store = vector_store
-    
-    return loaded_sites, len(all_docs)
-
-# LLM Initialization
-@st.cache_resource
-def get_llm():
-    return ChatGroq(
-        groq_api_key="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",
-        model_name="llama-3.3-70b-versatile",
-        temperature=0.2,
-        top_p=0.2,
-    )
-
-# Create prompt
-prompt = ChatPromptTemplate.from_template(
-    """
-    You are a Website Intelligence specialist who answers questions based on the content from the following websites:
-    - IRDAI (Insurance Regulatory and Development Authority of India)
-    - eGazette
-    - Enforcement Directorate - PMLA
-    - UIDAI (Unique Identification Authority of India)
-    
-    Answer the question based only on the information provided in the context. Be precise and accurate.
-    If the provided context doesn't contain the answer, clearly state that you don't have enough information.
-    Include any relevant hyperlinks from the documents in your response.
-    
-    <context>
-    {context}
-    </context>
-    
-    Question: {input}
-    """
-)
-
-# Two-column layout
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    # Load content button
-    if st.button("Load Website Content"):
-        with st.spinner("Loading website content..."):
-            num_sites, num_chunks = load_websites_to_vectorstore()
-            st.success(f"Loaded content from {num_sites} websites, created {num_chunks} document chunks")
-            st.write("Vector database successfully created!")
+            # Display success message
+            st.success(f"Successfully processed {len(successfully_loaded)}/{len(WEBSITES)} websites")
             
-    # Display status
-    if st.session_state.vector_store is not None:
-        st.success("Database loaded and ready for queries")
-    else:
-        st.warning("Please load website content first")
-
-with col2:
-    # User query interface
-    query = st.text_input("Enter your query:")
-    k_docs = st.slider("Number of relevant documents to retrieve", min_value=1, max_value=15, value=5)
-    
-    if st.button("Get Answer"):
-        if query and st.session_state.vector_store is not None:
-            with st.spinner("Retrieving relevant documents and generating answer..."):
-                # Get the LLM
-                llm = get_llm()
-                
-                # Use MMR retrieval for better diversity of results
-                retriever = st.session_state.vector_store.as_retriever(
-                    search_type="mmr",  # Maximum Marginal Relevance
-                    search_kwargs={
-                        "k": k_docs,
-                        "fetch_k": k_docs * 2,  # Fetch more docs initially then select diverse subset
-                        "lambda_mult": 0.7  # Balance between relevance and diversity (0-1)
-                    }
-                )
-                
-                # Create improved prompt
-                improved_prompt = ChatPromptTemplate.from_template(
-                    """
-                    You're an expert in IRDAI (Insurance Regulatory and Development Authority of India) regulations, 
-                    policies, and related information. Your task is to provide accurate information based ONLY on 
-                    the context provided.
-                    
-                    Context information from IRDAI websites:
-                    {context}
-                    
-                    Query: {query}
-                    
-                    Follow these instructions carefully:
-                    1. Answer ONLY from the provided context - do not use prior knowledge
-                    2. Be concise but thorough
-                    3. If the answer isn't in the context, clearly state that you don't have that information
-                    4. Include relevant links from the context in your response
-                    5. Format your answer for readability with headings and bullet points if appropriate
-                    
-                    Your response:
-                    """
-                )
-                
-                # Add query rewriting for better retrieval
-                rewrite_prompt = ChatPromptTemplate.from_template(
-                    """
-                    You are an expert in information retrieval from insurance regulatory websites.
-                    Your task is to rewrite the following query to make it more effective for retrieving 
-                    relevant information from IRDAI (Insurance Regulatory and Development Authority of India) documents.
-                    
-                    Original query: {query}
-                    
-                    Rewrite this query to be more specific, including key insurance regulatory terms and 
-                    concepts that would appear in official IRDAI documents. Do not change the fundamental 
-                    intent of the query, just optimize it for retrieval.
-                    
-                    Rewritten query:
-                    """
-                )
-                
-                # Define query rewriting chain
-                query_rewriter = rewrite_prompt | llm | StrOutputParser()
-                
-                # Create the RAG chain with query rewriting
-                rag_chain = (
-                    {"query": query_rewriter, "original_query": RunnablePassthrough()}
-                    | {"context": retriever, "query": lambda x: x["original_query"]}
-                    | improved_prompt
-                    | llm
-                )
-                
-                # Process the query
-                st.subheader("Query Processing")
-                with st.expander("Query Analysis", expanded=True):
-                    st.write("Original Query:", query)
-                    with st.spinner("Rewriting query for better retrieval..."):
-                        rewritten_query = query_rewriter.invoke({"query": query})
-                        st.write("Rewritten Query:", rewritten_query)
-                
-                # Get retrieved documents
-                with st.spinner("Retrieving relevant documents..."):
-                    retrieved_docs = retriever.invoke(rewritten_query)
-                    
-                    # Display retrieved documents
-                    st.subheader("Retrieved Documents:")
-                    for i, doc in enumerate(retrieved_docs):
-                        source = doc.metadata.get('source', 'Unknown')
-                        title = doc.metadata.get('title', f'Document {i+1}')
-                        
-                        with st.expander(f"{i+1}. {title} (Source: {source})"):
-                            st.write(doc.page_content)
-                            
-                            # Display links if available
-                            links = doc.metadata.get('links', {})
-                            if links:
-                                st.write("---")
-                                st.write("**Links:**")
-                                for link_text, url in links.items():
-                                    st.write(f"- [{link_text}]({url})")
-                
-                # Generate final response
-                with st.spinner("Generating comprehensive answer..."):
-                    response = rag_chain.invoke({
-                        "original_query": query
-                    })
-                    
-                    # Display final response
-                    st.subheader("Final Answer:")
-                    st.markdown(response.content)
+            # Display table preview (optional)
+            table_docs = [doc for doc in all_documents if doc.metadata.get("type") == "table"]
+            if table_docs:
+                with st.expander("Preview Extracted Tables"):
+                    for i, doc in enumerate(table_docs[:3]):  # Show first 3 tables only
+                        st.write(f"**{doc.metadata['source']}**")
+                        table_content = doc.page_content.replace("[TABLE] ", "")
+                        st.text(table_content)
+                        if i < len(table_docs[:3]) - 1:
+                            st.divider()
         else:
-            st.warning("Please enter a query and load website content first.")
+            st.error("Failed to load any content from the specified websites.")
+else:
+    # Display list of loaded websites
+    st.info("Websites loaded and indexed. Ask questions about their content below.")
+    
+    # Option to reload
+    if st.button("Reload Website Content"):
+        st.session_state.documents_loaded = False
+        st.experimental_rerun()
+
+# Chat interface (only show after documents are loaded)
+if st.session_state.documents_loaded:
+    question = st.chat_input("Ask a question about the website content:")
+    if question:
+        st.session_state.conversation_history.append({"role": "user", "content": question})
+        
+        related_documents = retrieve_docs(question)
+        
+        answer = answer_question(question, related_documents)
+        
+        st.session_state.conversation_history.append({"role": "assistant", "content": answer})
+
+# Display conversation history
+for message in st.session_state.conversation_history:
+    if message["role"] == "user":
+        st.chat_message("user").write(message["content"])
+    elif message["role"] == "assistant":
+        st.chat_message("assistant").write(message["content"])
