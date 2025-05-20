@@ -33,10 +33,8 @@ for website in websites:
         st.write(f"Fetching content from: {website}")
         loader = WebBaseLoader(website)
         docs = loader.load()
-
         for doc in docs:
             doc.metadata["source"] = website
-
         loaded_docs.extend(docs)
     except Exception as e:
         st.write(f"Error loading {website}: {e}")
@@ -58,13 +56,10 @@ llm = ChatGroq(
 prompt = ChatPromptTemplate.from_template(
     """
     You are a Website Intelligence specialist who answers questions as asked from the websites uploaded.
-
     Please answer precisely and also extract hyperlinks and display, if applicable.
-
     <context>
     {context}
     </context>
-
     Question: {input}"""
 )
 
@@ -74,8 +69,12 @@ text_splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=100,
     length_function=len,
 )
-
 document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
+
+# Create embeddings and vector store for semantic search
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+vectorstore = FAISS.from_documents(document_chunks, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
 # Stuff Document Chain Creation
 document_chain = create_stuff_documents_chain(llm, prompt)
@@ -84,17 +83,20 @@ document_chain = create_stuff_documents_chain(llm, prompt)
 st.session_state.retrieval_chain = document_chain
 
 query = st.text_input("Enter your query:")
-if st.button("Get Answer"):
-    if query:
-        # Directly pass the documents to the chain without using a retriever
-        context = "\n".join([doc.page_content for doc in st.session_state.loaded_docs])
-        response = st.session_state.retrieval_chain.invoke({"input": query, "context": context})
 
+if st.button("Get Answer"):
+    if query and st.session_state.loaded_docs:
+        # Retrieve relevant documents
+        relevant_docs = retriever.get_relevant_documents(query)
+        
+        # Pass retrieved documents to the chain
+        response = st.session_state.retrieval_chain.invoke({
+            "input": query, 
+            "context": "\n".join([doc.page_content for doc in relevant_docs])
+        })
+        
         # Display response
         st.write("Response:")
-        if isinstance(response, dict) and "answer" in response:
-            st.write(response["answer"])
-        else:
-            st.write("Here's your response!")
+        st.write(response)
     else:
-        st.write("No documents loaded. Please check the website fetching.")
+        st.write("Please enter a query and ensure documents are loaded.")
