@@ -14,7 +14,19 @@ if "loaded_content" not in st.session_state:
 
 # Hardcoded websites
 websites = [
-    "https://irdai.gov.in/acts"
+    "https://irdai.gov.in/acts",
+    "https://irdai.gov.in/rules",
+    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+    "https://irdai.gov.in/notifications",
+    "https://irdai.gov.in/circulars",
+    "https://irdai.gov.in/orders1",
+    "https://irdai.gov.in/exposure-drafts",
+    "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+    "https://irdai.gov.in/cic-orders",
+    "https://irdai.gov.in/antimoney-laundering",
+    "https://irdai.gov.in/other-communication",
+    "https://irdai.gov.in/directory-of-employees",
+    "https://irdai.gov.in/warnings-and-penalties"
 ]
 
 # Function to load website content
