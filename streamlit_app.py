@@ -5,7 +5,7 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.document_loaders import WebBaseLoader
 from langchain_community.vectorstores import FAISS
-from langchain_groq import GroqEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
@@ -72,8 +72,8 @@ def load_websites_to_vectorstore():
             st.write(f"❌ Error loading {website}: {e}")
     
     # Initialize embeddings
-    embeddings = GroqEmbeddings(
-        groq_api_key="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"
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
     
     # Create FAISS vector store
