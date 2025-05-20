@@ -1,21 +1,16 @@
 import streamlit as st
+import time
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.document_loaders import WebBaseLoader
 
 # Streamlit UI
 st.title("Website Intelligence")
 
 # Initialize session state variables
-if "loaded_docs" not in st.session_state:
-    st.session_state.loaded_docs = []
-if "retrieval_chain" not in st.session_state:
-    st.session_state.retrieval_chain = None
+if "loaded_content" not in st.session_state:
+    st.session_state.loaded_content = ""
 
 # Hardcoded websites
 websites = [
@@ -25,24 +20,36 @@ websites = [
     "https://uidai.gov.in/"
 ]
 
-loaded_docs = []
+# Function to load website content
+def load_websites():
+    all_content = []
+    
+    for website in websites:
+        try:
+            st.write(f"Fetching content from: {website}")
+            loader = WebBaseLoader(website)
+            docs = loader.load()
+            
+            # Extract text content and add source information
+            for doc in docs:
+                content = doc.page_content
+                content += f"\n(Source: {website})"
+                all_content.append(content)
+                
+        except Exception as e:
+            st.write(f"Error loading {website}: {e}")
+    
+    # Join all content into a single string
+    combined_content = "\n\n".join(all_content)
+    st.session_state.loaded_content = combined_content
+    
+    return len(all_content)
 
-# Load content from websites
-for website in websites:
-    try:
-        st.write(f"Fetching content from: {website}")
-        loader = WebBaseLoader(website)
-        docs = loader.load()
-        for doc in docs:
-            doc.metadata["source"] = website
-        loaded_docs.extend(docs)
-    except Exception as e:
-        st.write(f"Error loading {website}: {e}")
-
-st.write(f"Loaded documents: {len(loaded_docs)}")
-
-# Store loaded documents in session state
-st.session_state.loaded_docs = loaded_docs
+# Load content button
+if st.button("Load Website Content"):
+    with st.spinner("Loading website content..."):
+        num_docs = load_websites()
+        st.success(f"Loaded content from {num_docs} pages")
 
 # LLM Initialization
 llm = ChatGroq(
@@ -55,48 +62,40 @@ llm = ChatGroq(
 # ChatPrompt Template
 prompt = ChatPromptTemplate.from_template(
     """
-    You are a Website Intelligence specialist who answers questions as asked from the websites uploaded.
+    You are a Website Intelligence specialist who answers questions based on the content from the following websites:
+    - IRDAI (Insurance Regulatory and Development Authority of India)
+    - eGazette
+    - Enforcement Directorate - PMLA
+    - UIDAI (Unique Identification Authority of India)
+    
     Please answer precisely and also extract hyperlinks and display, if applicable.
+    
     <context>
     {context}
     </context>
-    Question: {input}"""
+    
+    Question: {input}
+    
+    Answer the question based only on the information provided in the context.
+    """
 )
 
-# Text Splitting
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
-    chunk_overlap=100,
-    length_function=len,
-)
-document_chunks = text_splitter.split_documents(st.session_state.loaded_docs)
-
-# Create embeddings and vector store for semantic search
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-vectorstore = FAISS.from_documents(document_chunks, embeddings)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
-# Stuff Document Chain Creation
-document_chain = create_stuff_documents_chain(llm, prompt)
-
-# Save document chain to session state
-st.session_state.retrieval_chain = document_chain
-
+# User query interface
 query = st.text_input("Enter your query:")
 
 if st.button("Get Answer"):
-    if query and st.session_state.loaded_docs:
-        # Retrieve relevant documents
-        relevant_docs = retriever.get_relevant_documents(query)
-        
-        # Pass retrieved documents to the chain
-        response = st.session_state.retrieval_chain.invoke({
-            "input": query, 
-            "context": "\n".join([doc.page_content for doc in relevant_docs])
-        })
-        
-        # Display response
-        st.write("Response:")
-        st.write(response)
+    if query and st.session_state.loaded_content:
+        with st.spinner("Generating answer..."):
+            # Pass the content directly to the LLM
+            response = llm.invoke(
+                prompt.format(
+                    input=query,
+                    context=st.session_state.loaded_content
+                )
+            )
+            
+            # Display response
+            st.subheader("Response:")
+            st.write(response.content)
     else:
-        st.write("Please enter a query and ensure documents are loaded.")
+        st.warning("Please enter a query and load website content first.")
