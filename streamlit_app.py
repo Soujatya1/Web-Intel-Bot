@@ -53,7 +53,7 @@ if st.button("Load Website Content"):
 
 # LLM Initialization
 llm = ChatGroq(
-    groq_api_key="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",
+    groq_api_key="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",
     model_name="llama-3.3-70b-versatile",
     temperature=0.2,
     top_p=0.2,
