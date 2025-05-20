@@ -101,6 +101,8 @@ prompt = ChatPromptTemplate.from_template(
     - eGazette
     - Enforcement Directorate - PMLA
     - UIDAI (Unique Identification Authority of India)
+
+    Consider "rules", "acts" to be keywords from the questions.
     
     Answer the question based only on the information provided in the context. Be precise and accurate.
     If the provided context doesn't contain the answer, clearly state that you don't have enough information.
