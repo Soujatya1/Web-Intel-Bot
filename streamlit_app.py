@@ -29,7 +29,7 @@ Answer:
 """
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vector_store = InMemoryVectorStore(embeddings=embeddings)
+vector_store = InMemoryVectorStore(embedding_function=embeddings)
 model = ChatGroq(groq_api_key="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", model_name="llama-3.3-70b-versatile", temperature=0.3)
 
 def load_website(url):
@@ -107,9 +107,13 @@ def split_text(documents):
 
 def index_docs(documents):
     if documents:
-        # Add documents to the vector store
-        vector_store.add_documents(documents)
-        return True
+        try:
+            # Add documents to the vector store
+            vector_store.add_documents(documents)
+            return True
+        except Exception as e:
+            st.error(f"Error indexing documents: {str(e)}")
+            return False
     return False
 
 def retrieve_docs(query):
@@ -165,7 +169,7 @@ if website_url and process_button:
                         vector_store.delete_collection()
                     except:
                         # Recreate the vector store if deletion fails
-                        vector_store = InMemoryVectorStore(embeddings=embeddings)
+                        vector_store = InMemoryVectorStore(embedding_function=embeddings)
                 
                 # Index the documents
                 if index_docs(chunked_documents):
