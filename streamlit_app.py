@@ -1,7 +1,7 @@
 import streamlit as st
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.vectorstores import FAISS  # Changed to FAISS instead of InMemoryVectorStore
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -29,8 +29,12 @@ Answer:
 """
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vector_store = InMemoryVectorStore(embedding_function=embeddings)
+# Initialize an empty list to store documents
+documents_list = []
 model = ChatGroq(groq_api_key="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", model_name="llama-3.3-70b-versatile", temperature=0.3)
+
+# Global variable for the vector store
+vector_store = None
 
 def load_website(url):
     # Use WebBaseLoader to load content from the website
@@ -106,10 +110,12 @@ def split_text(documents):
     return split_docs
 
 def index_docs(documents):
+    global vector_store
+    
     if documents:
         try:
-            # Add documents to the vector store
-            vector_store.add_documents(documents)
+            # Create a new FAISS index with the documents
+            vector_store = FAISS.from_documents(documents, embeddings)
             return True
         except Exception as e:
             st.error(f"Error indexing documents: {str(e)}")
@@ -117,11 +123,21 @@ def index_docs(documents):
     return False
 
 def retrieve_docs(query):
+    global vector_store
+    
+    if vector_store is None:
+        st.warning("No documents have been indexed yet.")
+        return []
+        
     # Add a debug print to check if there are documents in the vector store
-    docs = vector_store.similarity_search(query, k=4)  # Retrieve top 4 relevant documents
-    if not docs:
-        st.warning("No relevant documents found for this query.")
-    return docs
+    try:
+        docs = vector_store.similarity_search(query, k=4)  # Retrieve top 4 relevant documents
+        if not docs:
+            st.warning("No relevant documents found for this query.")
+        return docs
+    except Exception as e:
+        st.error(f"Error retrieving documents: {str(e)}")
+        return []
 
 def answer_question(question, documents):
     # Combine the contexts from all retrieved documents
