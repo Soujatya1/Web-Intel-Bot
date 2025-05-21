@@ -4,7 +4,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.embeddings import FastEmbeddings
+from langchain_community.embeddings import FastEmbeddings
 import pandas as pd
 
 st.title("Document GeN-ie")
