@@ -1,5 +1,5 @@
 import streamlit as st
-from langchain_community.document_loaders import WebBaseLoader
+from langchain_community.document_loaders import RecursiveUrlLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_groq import ChatGroq
@@ -51,16 +51,28 @@ def debug_print(message, force=False):
         st.write(f"🔍 DEBUG: {message}")
 
 def load_website_simple(url):
-    """Simplified website loading with extensive debugging"""
+    """Simplified website loading with extensive debugging using RecursiveUrlLoader"""
     debug_print(f"Starting to load website: {url}")
     
     try:
-        # Method 1: Try WebBaseLoader first
-        debug_print("Trying WebBaseLoader...")
-        loader = WebBaseLoader(url)
-        documents = loader.load()
+        # Method 1: Try RecursiveUrlLoader first
+        debug_print("Trying RecursiveUrlLoader...")
         
-        debug_print(f"WebBaseLoader returned {len(documents)} documents")
+        # Configure RecursiveUrlLoader with appropriate settings
+        loader = RecursiveUrlLoader(
+            url=url,
+            max_depth=1,  # Only load the main page, not recursive links
+            extractor=lambda x: BeautifulSoup(x, "html.parser").get_text(),
+            prevent_outside_links=True,
+            use_async=False,
+            timeout=30,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        )
+        
+        documents = loader.load()
+        debug_print(f"RecursiveUrlLoader returned {len(documents)} documents")
         
         if documents and len(documents) > 0:
             for i, doc in enumerate(documents):
@@ -68,9 +80,19 @@ def load_website_simple(url):
                 debug_print(f"First 200 chars: {doc.page_content[:200]}")
                 doc.metadata["source"] = url
                 doc.metadata["type"] = "web_content"
+                
+                # Clean up the content
+                content = doc.page_content
+                # Remove excessive whitespace
+                lines = (line.strip() for line in content.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                clean_content = ' '.join(chunk for chunk in chunks if chunk)
+                doc.page_content = clean_content
+                
+                debug_print(f"Cleaned document {i}: {len(doc.page_content)} characters")
         
         if not documents or all(not doc.page_content.strip() for doc in documents):
-            debug_print("WebBaseLoader failed or returned empty content, trying direct requests...")
+            debug_print("RecursiveUrlLoader failed or returned empty content, trying direct requests...")
             
             # Method 2: Try direct requests as fallback
             headers = {
@@ -82,7 +104,7 @@ def load_website_simple(url):
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Remove script and style elements
-            for script in soup(["script", "style"]):
+            for script in soup(["script", "style", "nav", "header", "footer"]):
                 script.decompose()
             
             # Get text content
