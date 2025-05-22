@@ -14,8 +14,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 # Hardcoded websites - modify these as needed
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules", "https://irdai.gov.in/consolidated-gazette-notified-regulations", "https://irdai.gov.in/notifications","https://irdai.gov.in/circulars","https://irdai.gov.in/orders1","https://irdai.gov.in/exposure-drafts","https://irdai.gov.in/programmes-to-advance-understanding-of-rti","https://irdai.gov.in/cic-orders","https://irdai.gov.in/antimoney-laundering","https://irdai.gov.in/other-communication","https://irdai.gov.in/directory-of-employees","https://irdai.gov.in/warnings-and-penalties",
-            "https://uidai.gov.in/en/","https://uidai.gov.in/en/about-uidai/legal-framework.html","https://uidai.gov.in/en/about-uidai/legal-framework/rules.html","https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html","https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html","https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html","https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html","https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation","https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules","https://enforcementdirectorate.gov.in/pmla", "https://enforcementdirectorate.gov.in/pmla?page=1", "https://enforcementdirectorate.gov.in/fema", "https://enforcementdirectorate.gov.in/fema?page=1", "https://enforcementdirectorate.gov.in/fema?page=2", "https://enforcementdirectorate.gov.in/fema?page=3", "https://enforcementdirectorate.gov.in/bns","https://enforcementdirectorate.gov.in/bnss","https://enforcementdirectorate.gov.in/bsa"
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"
 ]
 
 def filter_relevant_documents(document_links, query, ai_response):
@@ -395,6 +394,8 @@ if not st.session_state['docs_loaded']:
                     - When mentioning any acts, circulars, or regulations, try to reference the available document links
                     
                     Based on the context provided from the website(s), answer the user's question accurately and comprehensively.
+
+                    If no context for a question is not found, or no answer is generated, the response should show: "Thank you for your question. The details you’ve asked for fall outside the scope of the data I’ve been trained on. However, I’ve gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                     
                     <context>
                     {context}
