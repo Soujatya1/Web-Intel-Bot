@@ -57,6 +57,52 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:  # Only include substantial content
                 content_sections['news'].append(text)
     
+    # Extract subtitles with links
+    content_sections['subtitle_links'] = []
+    
+    # Look for various heading tags that might contain links
+    for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+        # Check if heading contains a link
+        link = heading.find('a')
+        if link and link.get('href'):
+            subtitle_text = heading.get_text(strip=True)
+            link_href = link.get('href')
+            
+            # Convert relative URLs to absolute URLs
+            if link_href.startswith('/'):
+                from urllib.parse import urljoin
+                link_href = urljoin(url, link_href)
+            elif not link_href.startswith('http'):
+                from urllib.parse import urljoin
+                link_href = urljoin(url, link_href)
+            
+            content_sections['subtitle_links'].append({
+                'title': subtitle_text,
+                'link': link_href
+            })
+    
+    # Also look for linked titles in list items or divs
+    for element in soup.find_all(['li', 'div']):
+        link = element.find('a')
+        if link and link.get('href'):
+            element_text = element.get_text(strip=True)
+            link_href = link.get('href')
+            
+            # Filter for substantial content that looks like titles
+            if len(element_text) > 10 and len(element_text) < 200:
+                # Convert relative URLs to absolute URLs
+                if link_href.startswith('/'):
+                    from urllib.parse import urljoin
+                    link_href = urljoin(url, link_href)
+                elif not link_href.startswith('http'):
+                    from urllib.parse import urljoin
+                    link_href = urljoin(url, link_href)
+                
+                content_sections['subtitle_links'].append({
+                    'title': element_text,
+                    'link': link_href
+                })
+    
     # Extract all text content
     main_text = soup.get_text()
     
@@ -137,7 +183,7 @@ if st.button("Load and Process"):
             # Enhanced prompt for IRDAI-specific queries
             prompt = ChatPromptTemplate.from_template(
                 """
-                You are an Website expert assistant.
+                You are an IRDAI (Insurance Regulatory and Development Authority of India) expert assistant.
                 
                 IMPORTANT INSTRUCTIONS:
                 - Pay special attention to dates, recent updates, and chronological information
@@ -146,7 +192,7 @@ if st.button("Load and Process"):
                 - Provide specific details about new regulations, policy changes, or announcements
                 - If you find dated information, mention the specific dates
                 
-                Based on the context provided from IRDAI, UIDAI, PMLA, and e-gazette website(s), answer the user's question accurately and comprehensively.
+                Based on the context provided from IRDAI website(s), answer the user's question accurately and comprehensively.
                 
                 <context>
                 {context}
@@ -197,31 +243,38 @@ if st.button("Get Answer") and query:
                 st.subheader("Sources:")
                 retrieved_docs = response.get('context', [])
                 sources = set()
-                pdf_links = set()
+                related_links = []
                 
                 for doc in retrieved_docs:
                     source = doc.metadata.get('source', 'Unknown')
                     sources.add(source)
                     
-                    # Extract PDF links from content
-                    content = doc.page_content.lower()
-                    import re
-                    pdf_pattern = r'https?://[^\s]+\.pdf'
-                    pdf_matches = re.findall(pdf_pattern, doc.page_content, re.IGNORECASE)
-                    for pdf_link in pdf_matches:
-                        pdf_links.add(pdf_link)
+                    # Extract subtitle links from metadata
+                    if 'sections' in doc.metadata and 'subtitle_links' in doc.metadata['sections']:
+                        for link_info in doc.metadata['sections']['subtitle_links']:
+                            if link_info not in related_links:
+                                related_links.append(link_info)
                 
                 # Display sources
                 st.write("**Source Websites:**")
                 for source in sources:
                     st.write(f"• {source}")
                 
-                # Display PDF links
-                if pdf_links:
-                    st.write("**Related PDF Documents:**")
-                    for pdf_link in pdf_links:
-                        st.write(f"• [PDF Document]({pdf_link})")
+                # Display related links from subtitles
+                if related_links:
+                    st.write("**Related Documents/Pages:**")
+                    for link_info in related_links[:10]:  # Limit to first 10 to avoid clutter
+                        st.write(f"• [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.write("**Related PDF Documents:** None found")
+                    st.write("**Related Documents/Pages:** None found")
     else:
         st.warning("Please load and process documents first.")
+
+# Debug section
+if st.checkbox("Show Debug Information"):
+    if st.session_state['loaded_docs']:
+        st.subheader("Debug: All Loaded Content")
+        for i, doc in enumerate(st.session_state['loaded_docs']):
+            with st.expander(f"Document {i+1} - {doc.metadata.get('source', 'Unknown')}"):
+                st.write("**Full Content:**")
+                st.text(doc.page_content)
