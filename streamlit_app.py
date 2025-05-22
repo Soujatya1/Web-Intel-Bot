@@ -137,7 +137,7 @@ if st.button("Load and Process"):
             # Enhanced prompt for IRDAI-specific queries
             prompt = ChatPromptTemplate.from_template(
                 """
-                You are an IRDAI (Insurance Regulatory and Development Authority of India) expert assistant.
+                You are an Website expert assistant.
                 
                 IMPORTANT INSTRUCTIONS:
                 - Pay special attention to dates, recent updates, and chronological information
@@ -146,7 +146,7 @@ if st.button("Load and Process"):
                 - Provide specific details about new regulations, policy changes, or announcements
                 - If you find dated information, mention the specific dates
                 
-                Based on the context provided from IRDAI website(s), answer the user's question accurately and comprehensively.
+                Based on the context provided from IRDAI, UIDAI, PMLA, and e-gazette website(s), answer the user's question accurately and comprehensively.
                 
                 <context>
                 {context}
@@ -192,25 +192,36 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Show retrieved documents
+            # Show source information
             if show_retrieved and 'context' in response:
-                st.subheader("Retrieved Context:")
+                st.subheader("Sources:")
                 retrieved_docs = response.get('context', [])
-                for i, doc in enumerate(retrieved_docs):
-                    with st.expander(f"Source {i+1}: {doc.metadata.get('source', 'Unknown')}"):
-                        st.write("**Retrieved Content:**")
-                        st.write(doc.page_content)
-                        if 'sections' in doc.metadata:
-                            st.write("**Structured Sections:**")
-                            st.json(doc.metadata['sections'])
+                sources = set()
+                pdf_links = set()
+                
+                for doc in retrieved_docs:
+                    source = doc.metadata.get('source', 'Unknown')
+                    sources.add(source)
+                    
+                    # Extract PDF links from content
+                    content = doc.page_content.lower()
+                    import re
+                    pdf_pattern = r'https?://[^\s]+\.pdf'
+                    pdf_matches = re.findall(pdf_pattern, doc.page_content, re.IGNORECASE)
+                    for pdf_link in pdf_matches:
+                        pdf_links.add(pdf_link)
+                
+                # Display sources
+                st.write("**Source Websites:**")
+                for source in sources:
+                    st.write(f"• {source}")
+                
+                # Display PDF links
+                if pdf_links:
+                    st.write("**Related PDF Documents:**")
+                    for pdf_link in pdf_links:
+                        st.write(f"• [PDF Document]({pdf_link})")
+                else:
+                    st.write("**Related PDF Documents:** None found")
     else:
         st.warning("Please load and process documents first.")
-
-# Debug section
-if st.checkbox("Show Debug Information"):
-    if st.session_state['loaded_docs']:
-        st.subheader("Debug: All Loaded Content")
-        for i, doc in enumerate(st.session_state['loaded_docs']):
-            with st.expander(f"Document {i+1} - {doc.metadata.get('source', 'Unknown')}"):
-                st.write("**Full Content:**")
-                st.text(doc.page_content)
