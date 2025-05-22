@@ -12,487 +12,716 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
+from difflib import SequenceMatcher
 
-def filter_relevant_documents(document_links, query, ai_response):
-    """Filter and rank document links based on AI response content and semantic relevance"""
-    from difflib import SequenceMatcher
-    
-    # Combine query and AI response for context analysis
-    full_context = f"{query} {ai_response}".lower()
-    
-    # Extract key terms mentioned in AI response
-    response_terms = set()
-    
-    # Split response into words and extract meaningful terms
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', ai_response.lower())
-    for word in words:
-        if len(word) > 3 and word not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 'would', 'could', 'should']:
-            response_terms.add(word)
-    
-    # Extract phrases from AI response (2-4 word combinations)
-    sentences = re.split(r'[.!?]', ai_response)
-    response_phrases = set()
-    for sentence in sentences:
-        words = sentence.strip().split()
-        for i in range(len(words)-1):
-            if len(words) > i+1:
-                phrase = f"{words[i]} {words[i+1]}".lower().strip()
-                if len(phrase) > 5:
-                    response_phrases.add(phrase)
-    
-    scored_docs = []
-    for doc_link in document_links:
-        title_lower = doc_link['title'].lower()
-        score = 0
-        
-        # Method 1: Semantic similarity with AI response
-        similarity = SequenceMatcher(None, title_lower, full_context).ratio()
-        score += similarity * 20
-        
-        # Method 2: Term overlap analysis
-        doc_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
-        common_terms = response_terms.intersection(doc_words)
-        score += len(common_terms) * 3
-        
-        # Method 3: Phrase matching
-        for phrase in response_phrases:
-            if phrase in title_lower:
-                score += 8
-        
-        # Method 4: Context-based scoring
-        # Check if document title relates to topics mentioned in AI response
-        context_indicators = [
-            ('insurance', 5), ('act', 6), ('amendment', 7), ('circular', 5),
-            ('guideline', 4), ('regulation', 5), ('policy', 4), ('direction', 5),
-            ('framework', 4), ('rule', 4), ('notification', 4), ('order', 4)
-        ]
-        
-        for indicator, weight in context_indicators:
-            if indicator in full_context and indicator in title_lower:
-                score += weight
-        
-        # Method 5: Year and date relevance
-        years_in_context = re.findall(r'\b(20\d{2})\b', full_context)
-        years_in_title = re.findall(r'\b(20\d{2})\b', title_lower)
-        
-        for year in years_in_context:
-            if year in years_in_title:
-                score += 10
-        
-        # Method 6: Document type preference
-        if doc_link['type'] == 'document':  # Direct downloads
-            score += 5
-        
-        # Method 7: Penalize generic or irrelevant titles
-        generic_terms = ['home', 'index', 'main', 'general', 'common', 'page', 'site']
-        if any(term in title_lower for term in generic_terms):
-            score -= 5
-        
-        # Method 8: Boost if document title contains query terms
-        query_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', query.lower()))
-        title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
-        query_overlap = query_words.intersection(title_words)
-        score += len(query_overlap) * 2
-        
-        if score > 0:
-            doc_link['relevance_score'] = score
-            scored_docs.append(doc_link)
-    
-    # Sort by relevance score (highest first)
-    scored_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
-    
-    return scored_docs
+# Configuration
+GROQ_API_KEY = "your_groq_api_key_here"  # Replace with your actual API key
 
-# Enhanced web scraping function
-def enhanced_web_scrape(url):
-    """Enhanced web scraping with better headers and error handling"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+# Specialized website collections for the four domains
+WEBSITE_COLLECTIONS = {
+    "IRDAI (Insurance Regulatory)": [
+        "https://www.irdai.gov.in/",
+        "https://www.irdai.gov.in/regulations-and-circulars",
+        "https://www.irdai.gov.in/acts-and-amendments",
+        "https://www.irdai.gov.in/whats-new",
+        "https://www.irdai.gov.in/guidelines-and-master-directions",
+        "https://www.irdai.gov.in/circulars",
+        "https://www.irdai.gov.in/notifications"
+    ],
+    "UIDAI (Unique Identification Authority)": [
+        "https://uidai.gov.in/",
+        "https://uidai.gov.in/legal-framework/acts-regulations.html",
+        "https://uidai.gov.in/my-aadhaar/about-your-aadhaar.html",
+        "https://uidai.gov.in/ecosystem/authentication-devices-documents.html",
+        "https://uidai.gov.in/contact-support/have-any-question.html",
+        "https://uidai.gov.in/about-uidai/unique-identification-authority-of-india/vision-mission.html"
+    ],
+    "e-Gazette (Government Publications)": [
+        "https://egazette.nic.in/",
+        "https://egazette.nic.in/SearchGazette.aspx",
+        "https://egazette.nic.in/Browse.aspx",
+        "https://egazette.nic.in/WriteReadData/2024/",
+        "https://egazette.nic.in/WriteReadData/2023/"
+    ],
+    "PMLA (Prevention of Money Laundering)": [
+        "https://finmin.nic.in/divisions/fiu-ind",
+        "https://fiuindia.gov.in/",
+        "https://fiuindia.gov.in/rules-regulations.php",
+        "https://fiuindia.gov.in/notifications.php",
+        "https://fiuindia.gov.in/guidelines.php"
+    ]
+}
+
+class WebScraper:
+    """Specialized web scraping for the four target domains"""
+    
+    @staticmethod
+    def get_headers():
+        """Return headers optimized for government websites"""
+        return {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
+            'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0'
         }
-        
-        session = requests.Session()
-        session.headers.update(headers)
-        
-        response = session.get(url, timeout=15)
-        response.raise_for_status()
-        return response.text
-        
-    except Exception as e:
-        st.error(f"Enhanced scraping failed for {url}: {e}")
+    
+    @staticmethod
+    def scrape_website(url):
+        """Enhanced scraping with retry logic for government websites"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                session = requests.Session()
+                session.headers.update(WebScraper.get_headers())
+                
+                response = session.get(url, timeout=20, verify=True)
+                response.raise_for_status()
+                
+                if response.status_code == 200:
+                    return response.text
+                    
+            except requests.exceptions.SSLError:
+                # Retry with SSL verification disabled for problematic sites
+                try:
+                    response = session.get(url, timeout=20, verify=False)
+                    response.raise_for_status()
+                    return response.text
+                except Exception as ssl_retry_error:
+                    st.warning(f"SSL retry failed for {url}: {ssl_retry_error}")
+                    
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    st.error(f"Failed to scrape {url} after {max_retries} attempts: {e}")
+                else:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    
         return None
 
-def extract_document_links(html_content, url):
-    """Extract document links specifically targeting IRDAI documents"""
-    soup = BeautifulSoup(html_content, 'html.parser')
+class SpecializedDocumentExtractor:
+    """Document extraction specialized for IRDAI, UIDAI, e-Gazette, and PMLA"""
     
-    # Remove script and style elements
-    for script in soup(["script", "style"]):
-        script.decompose()
+    # Document extensions common in government/regulatory sites
+    DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.rtf']
     
-    document_links = []
+    # Domain-specific keywords for each target website
+    DOMAIN_KEYWORDS = {
+        'irdai': [
+            'circular', 'guideline', 'regulation', 'notification', 'master', 'direction',
+            'amendment', 'insurance', 'policy', 'claim', 'premium', 'coverage',
+            'solvency', 'actuarial', 'tariff', 'commission', 'broker', 'agent',
+            'life insurance', 'general insurance', 'health insurance', 'reinsurance'
+        ],
+        'uidai': [
+            'aadhaar', 'uid', 'authentication', 'biometric', 'demographic', 'otp',
+            'enrollment', 'update', 'correction', 'verification', 'ekyc', 'resident',
+            'identity', 'unique', 'identification', 'privacy', 'security', 'api',
+            'demographic authentication', 'biometric authentication'
+        ],
+        'egazette': [
+            'gazette', 'notification', 'order', 'act', 'rule', 'amendment', 'ordinance',
+            'ministry', 'department', 'government', 'central', 'state', 'publication',
+            'official', 'extraordinary', 'part', 'section', 'sub-section'
+        ],
+        'pmla': [
+            'money laundering', 'suspicious transaction', 'cash transaction', 'fiu',
+            'financial intelligence', 'aml', 'kyc', 'customer due diligence',
+            'beneficial owner', 'wire transfer', 'correspondent banking',
+            'suspicious activity report', 'currency transaction report', 'compliance'
+        ]
+    }
     
-    # Method 1: Look for links that end with document extensions
-    document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
-    
-    all_links = soup.find_all('a', href=True)
-    for link in all_links:
-        href = link.get('href')
-        link_text = link.get_text(strip=True)
+    @staticmethod
+    def detect_website_domain(url):
+        """Detect which of the four domains the URL belongs to"""
+        url_lower = url.lower()
         
-        # Skip empty links or very short text
-        if not href or len(link_text) < 3:
-            continue
+        if 'irdai.gov.in' in url_lower:
+            return 'irdai'
+        elif 'uidai.gov.in' in url_lower:
+            return 'uidai'
+        elif 'egazette.nic.in' in url_lower:
+            return 'egazette'
+        elif any(indicator in url_lower for indicator in ['fiu', 'finmin.nic.in', 'fiuindia']):
+            return 'pmla'
+        else:
+            # Default fallback - try to detect from content patterns
+            return 'general'
+    
+    @staticmethod
+    def extract_document_links(html_content, url):
+        """Extract document links with domain-specific logic"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        
+        domain = SpecializedDocumentExtractor.detect_website_domain(url)
+        relevant_keywords = SpecializedDocumentExtractor.DOMAIN_KEYWORDS.get(domain, [])
+        
+        document_links = []
+        
+        # Method 1: Direct PDF and document links
+        document_links.extend(SpecializedDocumentExtractor._extract_direct_documents(soup, url))
+        
+        # Method 2: Domain-specific extraction
+        if domain == 'irdai':
+            document_links.extend(SpecializedDocumentExtractor._extract_irdai_documents(soup, url))
+        elif domain == 'uidai':
+            document_links.extend(SpecializedDocumentExtractor._extract_uidai_documents(soup, url))
+        elif domain == 'egazette':
+            document_links.extend(SpecializedDocumentExtractor._extract_gazette_documents(soup, url))
+        elif domain == 'pmla':
+            document_links.extend(SpecializedDocumentExtractor._extract_pmla_documents(soup, url))
+        
+        # Method 3: Generic keyword-based extraction
+        document_links.extend(SpecializedDocumentExtractor._extract_keyword_documents(soup, url, relevant_keywords))
+        
+        return SpecializedDocumentExtractor._deduplicate_and_rank(document_links)
+    
+    @staticmethod
+    def _extract_direct_documents(soup, url):
+        """Extract direct document file links"""
+        document_links = []
+        all_links = soup.find_all('a', href=True)
+        
+        for link in all_links:
+            href = link.get('href')
+            link_text = link.get_text(strip=True)
             
-        # Convert relative URLs to absolute URLs
-        if href.startswith('/'):
-            href = urljoin(url, href)
-        elif not href.startswith(('http://', 'https://')):
-            href = urljoin(url, href)
+            if not href or len(link_text) < 3:
+                continue
+                
+            href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+            
+            # Check for document extensions
+            if any(ext in href.lower() for ext in SpecializedDocumentExtractor.DOCUMENT_EXTENSIONS):
+                file_ext = href.split('.')[-1].upper()
+                document_links.append({
+                    'title': link_text or f"Document ({file_ext})",
+                    'link': href,
+                    'type': 'document',
+                    'source': 'direct_file',
+                    'confidence': 0.95
+                })
         
-        # Check if it's a document link
-        is_document_link = any(ext in href.lower() for ext in document_extensions)
-        
-        # Also check for common document-related keywords in the link text
-        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
-                           'notification', 'order', 'policy', 'master', 'framework', 'directive']
-        has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
-        
-        if is_document_link or has_doc_keywords:
-            document_links.append({
-                'title': link_text,
-                'link': href,
-                'type': 'document' if is_document_link else 'content'
-            })
+        return document_links
     
-    # Method 2: Look for table rows containing document information
-    # This specifically targets IRDAI's tabular format
-    tables = soup.find_all('table')
-    for table in tables:
-        rows = table.find_all('tr')
-        for row in rows:
-            cells = row.find_all(['td', 'th'])
-            if len(cells) >= 3:  # Assuming at least 3 columns like in your screenshot
-                # Look for subtitle column (usually contains the document title)
-                for cell in cells:
-                    links_in_cell = cell.find_all('a', href=True)
-                    for link in links_in_cell:
-                        href = link.get('href')
-                        link_text = link.get_text(strip=True)
-                        
-                        if not href or len(link_text) < 5:
-                            continue
-                            
-                        # Convert relative URLs to absolute URLs
-                        if href.startswith('/'):
-                            href = urljoin(url, href)
-                        elif not href.startswith(('http://', 'https://')):
-                            href = urljoin(url, href)
-                        
-                        # Check if it looks like a document reference
-                        document_patterns = [
-                            r'act.*\d{4}',  # Act with year
-                            r'circular.*\d+',  # Circular with number
-                            r'amendment.*act',  # Amendment act
-                            r'insurance.*act',  # Insurance act
-                            r'guideline',  # Guidelines
-                            r'master.*direction',  # Master directions
-                            r'regulation.*\d+'  # Regulations with numbers
-                        ]
-                        
-                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        is_document_extension = any(ext in href.lower() for ext in document_extensions)
-                        
-                        if is_likely_document or is_document_extension:
-                            document_links.append({
-                                'title': link_text,
-                                'link': href,
-                                'type': 'document' if is_document_extension else 'reference'
-                            })
+    @staticmethod
+    def _extract_irdai_documents(soup, url):
+        """IRDAI-specific document extraction"""
+        document_links = []
+        
+        # Look for IRDAI-specific patterns
+        irdai_patterns = [
+            r'circular\s+no\.?\s*\d+',
+            r'guideline\s+no\.?\s*\d+',
+            r'master\s+circular',
+            r'regulation\s+\d+',
+            r'notification\s+no\.?\s*\d+'
+        ]
+        
+        all_links = soup.find_all('a', href=True)
+        for link in all_links:
+            link_text = link.get_text(strip=True).lower()
+            href = link.get('href')
+            
+            if not href:
+                continue
+                
+            href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+            
+            # Check IRDAI patterns
+            for pattern in irdai_patterns:
+                if re.search(pattern, link_text, re.IGNORECASE):
+                    document_links.append({
+                        'title': link.get_text(strip=True),
+                        'link': href,
+                        'type': 'regulation',
+                        'source': 'irdai_pattern',
+                        'confidence': 0.85
+                    })
+                    break
+        
+        return document_links
     
-    # Method 3: Look for specific IRDAI document patterns in div/section structures
-    content_sections = soup.find_all(['div', 'section', 'article'])
-    for section in content_sections:
-        # Look for sections that might contain document listings
-        section_text = section.get_text().lower()
-        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
-            links_in_section = section.find_all('a', href=True)
-            for link in links_in_section:
+    @staticmethod
+    def _extract_uidai_documents(soup, url):
+        """UIDAI-specific document extraction"""
+        document_links = []
+        
+        # UIDAI-specific patterns
+        uidai_indicators = ['aadhaar', 'uid', 'authentication', 'enrollment', 'api', 'specification']
+        
+        all_links = soup.find_all('a', href=True)
+        for link in all_links:
+            link_text = link.get_text(strip=True).lower()
+            href = link.get('href')
+            
+            if not href or len(link_text) < 5:
+                continue
+                
+            href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+            
+            # Check for UIDAI-specific content
+            if any(indicator in link_text for indicator in uidai_indicators):
+                document_links.append({
+                    'title': link.get_text(strip=True),
+                    'link': href,
+                    'type': 'specification',
+                    'source': 'uidai_pattern',
+                    'confidence': 0.80
+                })
+        
+        return document_links
+    
+    @staticmethod
+    def _extract_gazette_documents(soup, url):
+        """e-Gazette specific document extraction"""
+        document_links = []
+        
+        # Look for gazette-specific elements
+        gazette_containers = soup.find_all(['div', 'td', 'span'], 
+            class_=lambda x: x and any(indicator in str(x).lower() 
+                for indicator in ['gazette', 'notification', 'publication']))
+        
+        for container in gazette_containers:
+            links = container.find_all('a', href=True)
+            for link in links:
                 href = link.get('href')
                 link_text = link.get_text(strip=True)
                 
-                if not href or len(link_text) < 5:
-                    continue
+                if href and len(link_text) > 10:
+                    href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+                    document_links.append({
+                        'title': link_text,
+                        'link': href,
+                        'type': 'gazette',
+                        'source': 'gazette_container',
+                        'confidence': 0.75
+                    })
+        
+        return document_links
+    
+    @staticmethod
+    def _extract_pmla_documents(soup, url):
+        """PMLA/FIU specific document extraction"""
+        document_links = []
+        
+        pmla_indicators = ['suspicious', 'transaction', 'report', 'guidance', 'compliance', 'aml', 'kyc']
+        
+        all_links = soup.find_all('a', href=True)
+        for link in all_links:
+            link_text = link.get_text(strip=True).lower()
+            href = link.get('href')
+            
+            if not href or len(link_text) < 8:
+                continue
                 
-                # Convert relative URLs to absolute URLs
-                if href.startswith('/'):
-                    href = urljoin(url, href)
-                elif not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
+            href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+            
+            # Check for PMLA-specific content
+            if any(indicator in link_text for indicator in pmla_indicators):
+                document_links.append({
+                    'title': link.get_text(strip=True),
+                    'link': href,
+                    'type': 'compliance',
+                    'source': 'pmla_pattern',
+                    'confidence': 0.80
+                })
+        
+        return document_links
+    
+    @staticmethod
+    def _extract_keyword_documents(soup, url, keywords):
+        """Generic keyword-based extraction"""
+        document_links = []
+        all_links = soup.find_all('a', href=True)
+        
+        for link in all_links:
+            link_text = link.get_text(strip=True).lower()
+            href = link.get('href')
+            
+            if not href or len(link_text) < 5:
+                continue
                 
-                # Filter for substantial document-like content
-                if len(link_text) > 10 and len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                                       'amendment', 'notification', 'insurance', 'policy']
-                    if any(keyword in link_text.lower() for keyword in document_keywords):
-                        document_links.append({
-                            'title': link_text,
-                            'link': href,
-                            'type': 'reference'
-                        })
+            href = SpecializedDocumentExtractor._make_absolute_url(href, url)
+            
+            # Check for keyword matches
+            matching_keywords = [kw for kw in keywords if kw in link_text]
+            
+            if matching_keywords:
+                document_links.append({
+                    'title': link.get_text(strip=True),
+                    'link': href,
+                    'type': 'reference',
+                    'source': 'keyword_match',
+                    'matching_keywords': matching_keywords,
+                    'confidence': min(0.7, len(matching_keywords) * 0.2 + 0.3)
+                })
+        
+        return document_links
     
-    # Remove duplicates while preserving order
-    seen_links = set()
-    unique_document_links = []
-    for link_info in document_links:
-        link_key = (link_info['title'], link_info['link'])
-        if link_key not in seen_links:
-            seen_links.add(link_key)
-            unique_document_links.append(link_info)
+    @staticmethod
+    def _make_absolute_url(href, base_url):
+        """Convert relative URLs to absolute URLs"""
+        if href.startswith('//'):
+            return f"https:{href}"
+        elif href.startswith('/'):
+            return urljoin(base_url, href)
+        elif not href.startswith(('http://', 'https://')):
+            return urljoin(base_url, href)
+        return href
     
-    # Sort by type: documents first, then references
-    unique_document_links.sort(key=lambda x: (x['type'] != 'document', x['title']))
-    
-    return unique_document_links
+    @staticmethod
+    def _deduplicate_and_rank(document_links):
+        """Remove duplicates and rank documents"""
+        seen_urls = set()
+        unique_links = []
+        
+        for link in document_links:
+            if link['link'] not in seen_urls:
+                seen_urls.add(link['link'])
+                unique_links.append(link)
+        
+        # Sort by confidence and type priority
+        type_priority = {'document': 4, 'regulation': 3, 'specification': 3, 'gazette': 2, 'compliance': 2, 'reference': 1}
+        
+        unique_links.sort(
+            key=lambda x: (x['confidence'], type_priority.get(x['type'], 0)), 
+            reverse=True
+        )
+        
+        return unique_links[:20]  # Limit to top 20 results
 
-def extract_structured_content(html_content, url):
-    """Extract structured content with better parsing and document links"""
-    soup = BeautifulSoup(html_content, 'html.parser')
+class ContentProcessor:
+    """Specialized content processing for the four domains"""
     
-    # Remove script and style elements
-    for script in soup(["script", "style"]):
-        script.decompose()
+    @staticmethod
+    def extract_structured_content(html_content, url):
+        """Extract and structure content based on domain"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Remove unnecessary elements
+        for element in soup(["script", "style", "nav", "footer", "aside"]):
+            element.decompose()
+        
+        domain = SpecializedDocumentExtractor.detect_website_domain(url)
+        
+        content_sections = {
+            'domain': domain,
+            'document_links': SpecializedDocumentExtractor.extract_document_links(html_content, url)
+        }
+        
+        # Domain-specific content extraction
+        if domain == 'irdai':
+            content_sections.update(ContentProcessor._extract_irdai_content(soup))
+        elif domain == 'uidai':
+            content_sections.update(ContentProcessor._extract_uidai_content(soup))
+        elif domain == 'egazette':
+            content_sections.update(ContentProcessor._extract_gazette_content(soup))
+        elif domain == 'pmla':
+            content_sections.update(ContentProcessor._extract_pmla_content(soup))
+        
+        # Extract main text content
+        main_text = soup.get_text()
+        clean_text = ContentProcessor._clean_text(main_text)
+        
+        return clean_text, content_sections
     
-    # Extract different sections
-    content_sections = {}
+    @staticmethod
+    def _extract_irdai_content(soup):
+        """Extract IRDAI-specific content sections"""
+        content = {}
+        
+        # Look for circulars and notifications
+        circular_sections = soup.find_all(text=re.compile(r'circular|notification', re.IGNORECASE))
+        content['circulars'] = [elem.parent.get_text(strip=True) for elem in circular_sections[:5]]
+        
+        # Look for recent updates
+        update_sections = soup.find_all(['div', 'section'], 
+            class_=lambda x: x and 'update' in str(x).lower())
+        content['updates'] = [section.get_text(strip=True) for section in update_sections[:3]]
+        
+        return content
     
-    # Look for news/updates sections
-    news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
-        keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
-    ))
+    @staticmethod
+    def _extract_uidai_content(soup):
+        """Extract UIDAI-specific content sections"""
+        content = {}
+        
+        # Look for Aadhaar-related sections
+        aadhaar_sections = soup.find_all(text=re.compile(r'aadhaar|authentication', re.IGNORECASE))
+        content['aadhaar_info'] = [elem.parent.get_text(strip=True) for elem in aadhaar_sections[:5]]
+        
+        return content
     
-    if news_sections:
-        content_sections['news'] = []
-        for section in news_sections:
-            text = section.get_text(strip=True)
-            if len(text) > 50:  # Only include substantial content
-                content_sections['news'].append(text)
+    @staticmethod
+    def _extract_gazette_content(soup):
+        """Extract e-Gazette specific content"""
+        content = {}
+        
+        # Look for publication information
+        pub_sections = soup.find_all(['div', 'td'], 
+            text=re.compile(r'publication|extraordinary|part', re.IGNORECASE))
+        content['publications'] = [section.get_text(strip=True) for section in pub_sections[:5]]
+        
+        return content
     
-    # Extract document links using our enhanced function
-    content_sections['document_links'] = extract_document_links(html_content, url)
+    @staticmethod
+    def _extract_pmla_content(soup):
+        """Extract PMLA/FIU specific content"""
+        content = {}
+        
+        # Look for compliance and reporting information
+        compliance_sections = soup.find_all(text=re.compile(r'compliance|report|suspicious', re.IGNORECASE))
+        content['compliance_info'] = [elem.parent.get_text(strip=True) for elem in compliance_sections[:5]]
+        
+        return content
     
-    # Extract all text content
-    main_text = soup.get_text()
-    
-    # Clean up text
-    lines = (line.strip() for line in main_text.splitlines())
-    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-    clean_text = '\n'.join(chunk for chunk in chunks if chunk)
-    
-    return clean_text, content_sections
+    @staticmethod
+    def _clean_text(text):
+        """Clean and format text content"""
+        # Remove extra whitespace and empty lines
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        cleaned = '\n'.join(chunk for chunk in chunks if chunk and len(chunk) > 3)
+        
+        # Remove very long lines (likely to be data/code)
+        lines = [line for line in cleaned.split('\n') if len(line) < 500]
+        
+        return '\n'.join(lines)
 
-# Initialize session state variables
-if 'loaded_docs' not in st.session_state:
-    st.session_state['loaded_docs'] = []
-if 'vector_db' not in st.session_state:
-    st.session_state['vector_db'] = None
-if 'retrieval_chain' not in st.session_state:
-    st.session_state['retrieval_chain'] = None
-
-# Streamlit UI
-st.title("Enhanced Website Intelligence for IRDAI")
-
-api_key = "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"
-
-websites_input = st.text_area("Enter website URLs (one per line):")
-
-if st.button("Load and Process"):
-    website_urls = websites_input.strip().splitlines()
-    st.session_state['loaded_docs'] = []
+class SpecializedProcessor:
+    """Main processor for the four specialized domains"""
     
-    for url in website_urls:
-        if not url.strip():
-            continue
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.llm = None
+        self.embedding = None
+        self.setup_models()
+    
+    def setup_models(self):
+        """Initialize LLM and embedding models"""
+        try:
+            self.llm = ChatGroq(
+                groq_api_key=self.api_key, 
+                model_name='llama3-70b-8192', 
+                temperature=0.1,
+                max_tokens=2048
+            )
+            self.embedding = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+        except Exception as e:
+            st.error(f"Failed to initialize models: {e}")
+    
+    def get_specialized_prompt_template(self):
+        """Get specialized prompt template for the four domains"""
+        return ChatPromptTemplate.from_template(
+            """
+            You are a specialized AI assistant for Indian regulatory and government websites, 
+            specifically IRDAI (Insurance), UIDAI (Aadhaar), e-Gazette (Government Publications), 
+            and PMLA/FIU (Financial Intelligence).
+            
+            DOMAIN-SPECIFIC INSTRUCTIONS:
+            
+            For IRDAI queries:
+            - Focus on insurance regulations, circulars, guidelines, and notifications
+            - Mention specific circular numbers, dates, and regulatory changes
+            - Emphasize compliance requirements and industry impacts
+            
+            For UIDAI queries:
+            - Focus on Aadhaar authentication, enrollment, and API specifications
+            - Mention security, privacy measures, and technical requirements
+            - Emphasize resident services and authentication processes
+            
+            For e-Gazette queries:
+            - Focus on government notifications, acts, rules, and amendments
+            - Mention publication dates, gazette numbers, and official classifications
+            - Emphasize legal and regulatory changes
+            
+            For PMLA/FIU queries:
+            - Focus on anti-money laundering, suspicious transaction reporting
+            - Mention compliance requirements, reporting formats, and deadlines
+            - Emphasize financial intelligence and regulatory compliance
+            
+            GENERAL INSTRUCTIONS:
+            - Always provide specific dates, numbers, and official references when available
+            - Mention if documents or detailed guidelines are available in the source materials
+            - Structure your response with clear headings and bullet points when appropriate
+            - If the query spans multiple domains, address each relevant domain separately
+            
+            Context from the websites:
+            <context>
+            {context}
+            </context>
+            
+            User Question: {input}
+            
+            Provide a comprehensive, domain-specific answer with official references and specific details.
+            """
+        )
+    
+    def process_documents(self, documents):
+        """Process documents and create specialized retrieval chain"""
+        if not documents:
+            return None, 0
             
         try:
-            st.write(f"Loading URL: {url}")
-            
-            # Use enhanced scraping
-            html_content = enhanced_web_scrape(url)
-            if html_content:
-                clean_text, sections = extract_structured_content(html_content, url)
-                
-                # Create document object
-                doc = Document(
-                    page_content=clean_text,
-                    metadata={"source": url, "sections": sections}
-                )
-                st.session_state['loaded_docs'].append(doc)
-                
-                # Show extracted sections
-                if sections.get('news'):
-                    with st.expander(f"News/Updates found from {url}"):
-                        for i, news_item in enumerate(sections['news'][:3]):
-                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
-                
-                # Show extracted document links
-                if sections.get('document_links'):
-                    with st.expander(f"Document Links found from {url}"):
-                        st.write(f"**Total documents found:** {len(sections['document_links'])}")
-                        
-                        # Group by type
-                        pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
-                        ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
-                        
-                        if pdf_docs:
-                            st.write("**📄 Direct Document Downloads (PDFs/Files):**")
-                            for i, link_info in enumerate(pdf_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        
-                        if ref_docs:
-                            st.write("**🔗 Document References/Content Pages:**")
-                            for i, link_info in enumerate(ref_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                else:
-                    st.write(f"No document links found from {url}")
-            
-            st.success(f"Successfully loaded content from {url}")
-            
-            # Display extracted content preview
-            if st.session_state['loaded_docs']:
-                latest_doc = st.session_state['loaded_docs'][-1]
-                with st.expander(f"Content Preview from {url}"):
-                    st.write("**Document Links Found:**")
-                    doc_links = latest_doc.metadata.get('sections', {}).get('document_links', [])
-                    st.write(f"Total: {len(doc_links)} document links")
-                    
-                    st.write("**Content Preview (first 1000 characters):**")
-                    st.text(latest_doc.page_content[:1000] + "..." if len(latest_doc.page_content) > 1000 else latest_doc.page_content)
-                    st.write(f"**Total Content Length:** {len(latest_doc.page_content)} characters")
-                    
-        except Exception as e:
-            st.error(f"Error loading {url}: {e}")
-    
-    st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
-    
-    # Process documents if any were loaded
-    if api_key and st.session_state['loaded_docs']:
-        with st.spinner("Processing documents..."):
-            llm = ChatGroq(groq_api_key=api_key, model_name='llama3-70b-8192', temperature=0.2, top_p=0.2)
-            hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            
-            # Enhanced prompt for IRDAI-specific queries with document links
-            prompt = ChatPromptTemplate.from_template(
-                """
-                You are an IRDAI (Insurance Regulatory and Development Authority of India) expert assistant.
-                
-                IMPORTANT INSTRUCTIONS:
-                - Pay special attention to dates, recent updates, and chronological information
-                - When asked about "what's new" or recent developments, focus on the most recent information available
-                - Look for press releases, circulars, guidelines, and policy updates
-                - Provide specific details about new regulations, policy changes, or announcements
-                - If you find dated information, mention the specific dates
-                - When mentioning any acts, circulars, or regulations, try to reference the available document links
-                
-                Based on the context provided from IRDAI website(s), answer the user's question accurately and comprehensively.
-                
-                <context>
-                {context}
-                </context>
-                
-                Question: {input}
-                
-                Answer with specific details, dates, and references where available. If relevant documents are mentioned, note that direct links may be available in the sources section.
-                """
-            )
-            
-            # Text Splitting with smaller chunks for better retrieval
+            # Enhanced text splitting for regulatory documents
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1500,
-                chunk_overlap=200,
+                chunk_size=1200,
+                chunk_overlap=150,
                 length_function=len,
+                separators=["\n\n", "\n", ". ", " ", ""]
             )
             
-            document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
-            st.write(f"Number of chunks created: {len(document_chunks)}")
+            document_chunks = text_splitter.split_documents(documents)
             
-            # Vector database storage
-            st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
+            if not document_chunks:
+                return None, 0
             
-            # Create chains
-            document_chain = create_stuff_documents_chain(llm, prompt)
-            retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})  # Retrieve more chunks
-            st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+            # Create vector database
+            vector_db = FAISS.from_documents(document_chunks, self.embedding)
             
-            st.success("Documents processed and ready for querying!")
+            # Create specialized chains
+            prompt = self.get_specialized_prompt_template()
+            document_chain = create_stuff_documents_chain(self.llm, prompt)
+            retriever = vector_db.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 8}
+            )
+            retrieval_chain = create_retrieval_chain(retriever, document_chain)
+            
+            return retrieval_chain, len(document_chunks)
+            
+        except Exception as e:
+            st.error(f"Error processing documents: {e}")
+            return None, 0
 
-# Query Section
-st.subheader("Ask Questions about IRDAI")
-query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
-
-show_retrieved = st.checkbox("Show retrieved documents with answer", value=True)
-
-if st.button("Get Answer") and query:
-    if st.session_state['retrieval_chain']:
-        with st.spinner("Searching and generating answer..."):
-            response = st.session_state['retrieval_chain'].invoke({"input": query})
+class StreamlitUI:
+    """Specialized Streamlit UI for the four domains"""
+    
+    def __init__(self):
+        self.initialize_session_state()
+    
+    def initialize_session_state(self):
+        """Initialize session state variables"""
+        if 'loaded_docs' not in st.session_state:
+            st.session_state['loaded_docs'] = []
+        if 'retrieval_chain' not in st.session_state:
+            st.session_state['retrieval_chain'] = None
+        if 'processor' not in st.session_state:
+            st.session_state['processor'] = SpecializedProcessor(GROQ_API_KEY)
+        if 'current_websites' not in st.session_state:
+            st.session_state['current_websites'] = []
+        if 'document_links' not in st.session_state:
+            st.session_state['document_links'] = []
+    
+    def render_header(self):
+        """Render the application header"""
+        st.title("🏛️ Indian Regulatory Intelligence System")
+        st.markdown("""
+        **Specialized AI Assistant for Indian Regulatory Websites**
+        
+        📋 **Supported Domains:**
+        - **IRDAI**: Insurance regulations, circulars, and guidelines
+        - **UIDAI**: Aadhaar authentication and specifications  
+        - **e-Gazette**: Government notifications and publications
+        - **PMLA/FIU**: Anti-money laundering and financial intelligence
+        """)
+        
+        st.divider()
+    
+    def render_website_selection(self):
+        """Render website selection interface"""
+        st.subheader("📡 Select Domain & Load Content")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            selected_collection = st.selectbox(
+                "Choose Regulatory Domain:",
+                options=list(WEBSITE_COLLECTIONS.keys()),
+                help="Select the regulatory domain you want to analyze"
+            )
+        
+        with col2:
+            if st.button("🔄 Load Domain Content", type="primary"):
+                self.load_website_collection(selected_collection)
+        
+        # Show custom URL input
+        with st.expander("➕ Add Custom URLs"):
+            custom_url = st.text_input(
+                "Enter additional URL:",
+                placeholder="https://example.gov.in/page"
+            )
+            if st.button("Add URL") and custom_url:
+                self.load_single_website(custom_url)
+    
+    def load_website_collection(self, collection_name):
+        """Load a complete website collection"""
+        if collection_name not in WEBSITE_COLLECTIONS:
+            st.error("Invalid collection selected")
+            return
+        
+        urls = WEBSITE_COLLECTIONS[collection_name]
+        
+        with st.spinner(f"Loading {collection_name} content..."):
+            progress_bar = st.progress(0)
+            all_documents = []
+            all_doc_links = []
             
-            st.subheader("Response:")
-            st.write(response['answer'])
-            
-            # Show source information with document links
-            if show_retrieved and 'context' in response:
-                st.subheader("Sources and Relevant Documents:")
-                retrieved_docs = response.get('context', [])
-                sources = set()
-                all_document_links = []
+            for i, url in enumerate(urls):
+                st.info(f"Processing: {url}")
                 
-                for doc in retrieved_docs:
-                    source = doc.metadata.get('source', 'Unknown')
-                    sources.add(source)
+                # Scrape website
+                html_content = WebScraper.scrape_website(url)
+                if html_content:
+                    # Process content
+                    clean_text, content_sections = ContentProcessor.extract_structured_content(html_content, url)
                     
-                    # Extract document links from metadata
-                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                        for link_info in doc.metadata['sections']['document_links']:
-                            if link_info not in all_document_links:
-                                all_document_links.append(link_info)
+                    if clean_text and len(clean_text.strip()) > 100:
+                        # Create document
+                        doc = Document(
+                            page_content=clean_text,
+                            metadata={
+                                'source': url,
+                                'domain': content_sections.get('domain', 'unknown'),
+                                'collection': collection_name
+                            }
+                        )
+                        all_documents.append(doc)
+                        
+                        # Collect document links
+                        if 'document_links' in content_sections:
+                            all_doc_links.extend(content_sections['document_links'])
                 
-                # Display sources
-                st.write("**Source Websites:**")
-                for source in sources:
-                    st.write(f"• {source}")
+                progress_bar.progress((i + 1) / len(urls))
+            
+            if all_documents:
+                # Process documents
+                retrieval_chain, chunk_count = st.session_state['processor'].process_documents(all_documents)
                 
-                # Filter and rank document links based on query relevance
-                if all_document_links:
-                    relevant_docs = filter_relevant_documents(all_document_links, query, response['answer'])
+                if retrieval_chain:
+                    st.session_state['retrieval_chain'] = retrieval_chain
+                    st.session_state['loaded_docs'] = all_documents
+                    st.session_state['current_websites'] = urls
+                    st.session_state['document_links'] = all_doc_links[:15]  # Limit to top 15
                     
-                    if relevant_docs:
-                        st.write("**📄 Most Relevant Documents:**")
-                        for i, link_info in enumerate(relevant_docs[:3]):  # Show only top 3 most relevant
-                            st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                    else:
-                        st.write("**Related Documents:** No documents specifically matching your query found.")
-    else:
-        st.warning("Please load and process documents first.")
-
-# Debug section
-if st.checkbox("Show Debug Information"):
-    if st.session_state['loaded_docs']:
-        st.subheader("Debug: Document Links Analysis")
-        for i, doc in enumerate(st.session_state['loaded_docs']):
-            with st.expander(f"Document {i+1} - {doc.metadata.get('source', 'Unknown')}"):
-                doc_links = doc.metadata.get('sections', {}).get('document_links', [])
-                st.write(f"**Total Document Links Found:** {len(doc_links)}")
-                
-                if doc_links:
-                    for j, link in enumerate(doc_links[:10]):
-                        st.write(f"**Link {j+1}:** {link['title']} | Type: {link['type']}")
-                        st.write(f"URL: {link['link']}")
-                        st.write("---")
-                
-                st.write("**Sample Content:**")
-                st.text(doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content)
+                    st.success(f"✅ Successfully loaded {len(all_documents)} pages with {chunk_count} text chunks")
+                    
+                    # Show document links if available
+                    if all_doc_links:
+                        with st.expander(f"📄 Found {len(all_doc_links)} Documents & References"):
+                            for doc_link in all_doc_links[:10]:
+                                st.markdown(f"**{doc_link['title']}**")
+                                st.markdown(f"🔗 [{doc_link['link']}]({doc_link['link']})")
+                                st.markdown(f"*Type: {doc_link['type']} | Confidence: {doc_link['confidence']:.2f}*")
+                                st.divider()
+                else:
+                    st.error("Failed")
