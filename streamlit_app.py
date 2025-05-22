@@ -304,7 +304,7 @@ if 'retrieval_chain' not in st.session_state:
     st.session_state['retrieval_chain'] = None
 
 # Streamlit UI
-st.title("Enhanced Website Intelligence for IRDAI")
+st.title("Web GEN-ie")
 
 api_key = "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"
 
@@ -431,7 +431,7 @@ if st.button("Load and Process"):
             st.success("Documents processed and ready for querying!")
 
 # Query Section
-st.subheader("Ask Questions about IRDAI")
+st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
 show_retrieved = st.checkbox("Show retrieved documents with answer", value=True)
