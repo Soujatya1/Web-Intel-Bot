@@ -1,15 +1,12 @@
 import streamlit as st
-from langchain.document_loaders.sitemap import SitemapLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
 from langchain_groq import ChatGroq
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
-from langchain.document_loaders import WebBaseLoader
+from langchain.schema import Document
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -83,10 +80,6 @@ st.title("Enhanced Website Intelligence for IRDAI")
 
 api_key = "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"
 
-# Add options for enhanced scraping
-st.subheader("Scraping Options")
-use_enhanced_scraping = st.checkbox("Use Enhanced Scraping (better headers and session handling)")
-
 websites_input = st.text_area("Enter website URLs (one per line):")
 
 if st.button("Load and Process"):
@@ -100,34 +93,23 @@ if st.button("Load and Process"):
         try:
             st.write(f"Loading URL: {url}")
             
-            if use_enhanced_scraping:
-                # Use enhanced scraping
-                html_content = enhanced_web_scrape(url)
-                if html_content:
-                    clean_text, sections = extract_structured_content(html_content, url)
-                    
-                    # Create document object
-                    from langchain.schema import Document
-                    doc = Document(
-                        page_content=clean_text,
-                        metadata={"source": url, "sections": sections}
-                    )
-                    st.session_state['loaded_docs'].append(doc)
-                    
-                    # Show extracted sections
-                    if sections.get('news'):
-                        with st.expander(f"News/Updates found from {url}"):
-                            for i, news_item in enumerate(sections['news'][:3]):
-                                st.write(f"**Item {i+1}:** {news_item[:200]}...")
-            else:
-                # Use standard WebBaseLoader
-                loader = WebBaseLoader(url)
-                docs = loader.load()
+            # Use enhanced scraping
+            html_content = enhanced_web_scrape(url)
+            if html_content:
+                clean_text, sections = extract_structured_content(html_content, url)
                 
-                for doc in docs:
-                    doc.metadata["source"] = url
+                # Create document object
+                doc = Document(
+                    page_content=clean_text,
+                    metadata={"source": url, "sections": sections}
+                )
+                st.session_state['loaded_docs'].append(doc)
                 
-                st.session_state['loaded_docs'].extend(docs)
+                # Show extracted sections
+                if sections.get('news'):
+                    with st.expander(f"News/Updates found from {url}"):
+                        for i, news_item in enumerate(sections['news'][:3]):
+                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
             
             st.success(f"Successfully loaded content from {url}")
             
