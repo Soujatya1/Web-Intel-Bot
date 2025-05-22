@@ -5,21 +5,21 @@ from langchain_community.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_core.documents import Document
 import os
 import pandas as pd
 from bs4 import BeautifulSoup
 import requests
+import time
 
 st.title("Document GeN-ie")
 st.subheader("Chat with your websites")
 
-# Create directory if it doesn't exist
-websites_directory = '.github/'
-os.makedirs(websites_directory, exist_ok=True)
+# Debug mode toggle
+debug_mode = st.sidebar.checkbox("Enable Debug Mode", value=True)
 
 template = """
 You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. As per the question asked, please mention the accurate and precise related information. Use point-wise format, if required.
-Also answer situation-based questions derived from the context as per the question.
 
 The document may contain tables. Tables are formatted as CSV data and preceded by [TABLE] markers.
 
@@ -29,323 +29,311 @@ Answer:
 """
 
 # Initialize embeddings and model
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-model = ChatGroq(groq_api_key="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", model_name="llama-3.3-70b-versatile", temperature=0.3)
+@st.cache_resource
+def initialize_components():
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    model = ChatGroq(
+        groq_api_key="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", 
+        model_name="llama-3.3-70b-versatile", 
+        temperature=0.3
+    )
+    return embeddings, model
+
+embeddings, model = initialize_components()
 
 # Global variable for the vector store
-vector_store = None
+if 'vector_store' not in st.session_state:
+    st.session_state.vector_store = None
 
-def load_website(url):
-    """Load content from a website including text and tables"""
+def debug_print(message, force=False):
+    """Print debug messages if debug mode is enabled"""
+    if debug_mode or force:
+        st.write(f"🔍 DEBUG: {message}")
+
+def load_website_simple(url):
+    """Simplified website loading with extensive debugging"""
+    debug_print(f"Starting to load website: {url}")
+    
     try:
-        # Use WebBaseLoader to load content from the website
+        # Method 1: Try WebBaseLoader first
+        debug_print("Trying WebBaseLoader...")
         loader = WebBaseLoader(url)
         documents = loader.load()
         
-        # Ensure documents is not empty
-        if not documents:
-            st.warning(f"No content could be loaded from {url}")
-            return []
+        debug_print(f"WebBaseLoader returned {len(documents)} documents")
         
-        # Add source and type metadata
-        for doc in documents:
-            doc.metadata["source"] = url
-            doc.metadata["type"] = "text"
+        if documents and len(documents) > 0:
+            for i, doc in enumerate(documents):
+                debug_print(f"Document {i}: {len(doc.page_content)} characters")
+                debug_print(f"First 200 chars: {doc.page_content[:200]}")
+                doc.metadata["source"] = url
+                doc.metadata["type"] = "web_content"
         
-        # Process tables in HTML content if they exist
-        try:
-            # Get HTML content
-            response = requests.get(url, timeout=10)
+        if not documents or all(not doc.page_content.strip() for doc in documents):
+            debug_print("WebBaseLoader failed or returned empty content, trying direct requests...")
+            
+            # Method 2: Try direct requests as fallback
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find all tables in the HTML
-            html_tables = soup.find_all('table')
+            soup = BeautifulSoup(response.content, 'html.parser')
             
-            from langchain_core.documents import Document
+            # Remove script and style elements
+            for script in soup(["script", "style"]):
+                script.decompose()
             
-            for i, table in enumerate(html_tables):
-                try:
-                    # Convert HTML table to pandas DataFrame
-                    df_list = pd.read_html(str(table))
-                    
-                    for j, df in enumerate(df_list):
-                        if not df.empty:
-                            # Convert to CSV string
-                            csv_string = df.to_csv(index=False)
-                            
-                            # Create a document for each table
-                            table_doc = Document(
-                                page_content=f"[TABLE] Table {i+1}.{j+1} from {url}:\n{csv_string}",
-                                metadata={
-                                    "source": url,
-                                    "type": "table"
-                                }
-                            )
-                            documents.append(table_doc)
-                except Exception as table_error:
-                    # Skip tables that can't be parsed
-                    print(f"Error parsing table {i}: {str(table_error)}")
-                    continue
-        except Exception as e:
-            # No tables found or error in extraction
-            print(f"Error extracting tables from {url}: {str(e)}")
+            # Get text content
+            text_content = soup.get_text()
             
+            # Clean up text
+            lines = (line.strip() for line in text_content.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            debug_print(f"Direct extraction got {len(clean_text)} characters")
+            debug_print(f"Sample text: {clean_text[:200]}")
+            
+            if clean_text.strip():
+                documents = [Document(
+                    page_content=clean_text,
+                    metadata={"source": url, "type": "web_content"}
+                )]
+            else:
+                debug_print("No content extracted from direct method either")
+                return []
+        
         return documents
         
     except Exception as e:
-        st.error(f"Error loading website {url}: {str(e)}")
+        debug_print(f"Error loading website: {str(e)}", force=True)
+        st.error(f"Failed to load {url}: {str(e)}")
         return []
 
-def split_text(documents):
-    """Split documents into chunks while preserving table integrity"""
+def split_text_simple(documents):
+    """Simplified text splitting with debugging"""
+    debug_print(f"Starting to split {len(documents)} documents")
+    
     if not documents:
+        debug_print("No documents to split")
         return []
     
-    # Use a splitter that respects table boundaries
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        add_start_index=True,
-        separators=["\n\n", "\n", " ", ""]
+        chunk_size=800,  # Smaller chunks for better retrieval
+        chunk_overlap=100,
+        separators=["\n\n", "\n", ". ", " ", ""]
     )
     
-    # Process text and table documents differently
-    split_docs = []
-    for doc in documents:
-        # Keep tables intact (don't split)
-        if doc.metadata.get("type") == "table":
-            split_docs.append(doc)
-        else:
-            # Split text documents
-            try:
-                splits = text_splitter.split_documents([doc])
-                # Make sure metadata is preserved
-                for split in splits:
-                    split.metadata = doc.metadata.copy()
-                split_docs.extend(splits)
-            except Exception as e:
-                st.warning(f"Error splitting document: {str(e)}")
-                # Add the original document if splitting fails
-                split_docs.append(doc)
-    
-    return split_docs
-
-def index_docs(documents):
-    """Index documents in FAISS vector store"""
-    global vector_store
-    
-    if not documents:
-        st.warning("No documents to index.")
-        return False
+    all_splits = []
+    for i, doc in enumerate(documents):
+        debug_print(f"Splitting document {i} with {len(doc.page_content)} characters")
         
-    try:
-        # Ensure all documents have content
-        valid_docs = [doc for doc in documents if doc.page_content.strip()]
-        
-        if not valid_docs:
-            st.warning("No valid documents with content to index.")
-            return False
-        
-        # Create a new FAISS index with the documents
-        vector_store = FAISS.from_documents(valid_docs, embeddings)
-        st.info(f"Successfully indexed {len(valid_docs)} document chunks.")
-        return True
-        
-    except Exception as e:
-        st.error(f"Error indexing documents: {str(e)}")
-        return False
-
-def retrieve_docs(query):
-    """Retrieve relevant documents from vector store"""
-    global vector_store
-    
-    if vector_store is None:
-        st.warning("No documents have been indexed yet.")
-        return []
-        
-    try:
-        # Retrieve top 4 relevant documents
-        docs = vector_store.similarity_search(query, k=4)
-        
-        if not docs:
-            st.warning("No relevant documents found for this query.")
-            return []
+        if len(doc.page_content.strip()) < 50:
+            debug_print(f"Document {i} too short, skipping")
+            continue
             
-        # Filter out empty documents
-        valid_docs = [doc for doc in docs if doc.page_content.strip()]
-        return valid_docs
-        
+        try:
+            splits = text_splitter.split_documents([doc])
+            debug_print(f"Document {i} split into {len(splits)} chunks")
+            
+            for j, split in enumerate(splits):
+                split.metadata = doc.metadata.copy()
+                split.metadata["chunk_id"] = f"{i}_{j}"
+                debug_print(f"Chunk {i}_{j}: {len(split.page_content)} chars")
+                
+            all_splits.extend(splits)
+        except Exception as e:
+            debug_print(f"Error splitting document {i}: {str(e)}")
+            # Add original doc if splitting fails
+            all_splits.append(doc)
+    
+    debug_print(f"Total chunks created: {len(all_splits)}")
+    return all_splits
+
+def create_vector_store(documents):
+    """Create vector store with debugging"""
+    debug_print(f"Creating vector store with {len(documents)} documents")
+    
+    if not documents:
+        debug_print("No documents to index")
+        return False
+    
+    # Filter out empty documents
+    valid_docs = []
+    for i, doc in enumerate(documents):
+        if doc.page_content.strip():
+            valid_docs.append(doc)
+            debug_print(f"Valid doc {i}: {len(doc.page_content)} chars")
+        else:
+            debug_print(f"Skipping empty doc {i}")
+    
+    if not valid_docs:
+        debug_print("No valid documents after filtering")
+        return False
+    
+    try:
+        debug_print("Creating FAISS index...")
+        st.session_state.vector_store = FAISS.from_documents(valid_docs, embeddings)
+        debug_print(f"Successfully created vector store with {len(valid_docs)} documents")
+        return True
     except Exception as e:
-        st.error(f"Error retrieving documents: {str(e)}")
+        debug_print(f"Error creating vector store: {str(e)}", force=True)
+        st.error(f"Failed to create vector store: {str(e)}")
+        return False
+
+def search_documents(query, k=4):
+    """Search documents with debugging"""
+    debug_print(f"Searching for: '{query}'")
+    
+    if st.session_state.vector_store is None:
+        debug_print("No vector store available")
+        return []
+    
+    try:
+        docs = st.session_state.vector_store.similarity_search(query, k=k)
+        debug_print(f"Found {len(docs)} relevant documents")
+        
+        for i, doc in enumerate(docs):
+            debug_print(f"Result {i}: {len(doc.page_content)} chars from {doc.metadata.get('source', 'unknown')}")
+            debug_print(f"Preview: {doc.page_content[:100]}...")
+        
+        return docs
+    except Exception as e:
+        debug_print(f"Error searching documents: {str(e)}", force=True)
         return []
 
-def answer_question(question, documents):
-    """Generate answer based on retrieved documents"""
-    if not documents:
-        return "I don't have enough context to answer that question based on the processed websites."
+def generate_answer(question, context_docs):
+    """Generate answer with debugging"""
+    debug_print(f"Generating answer for: '{question}'")
+    debug_print(f"Using {len(context_docs)} context documents")
     
-    # Combine the contexts from all retrieved documents
-    context = "\n\n".join([doc.page_content for doc in documents if doc.page_content.strip()])
+    if not context_docs:
+        return "I don't have any relevant information to answer your question. Please make sure you've processed some websites first."
+    
+    # Combine contexts
+    context = "\n\n---\n\n".join([doc.page_content for doc in context_docs])
+    debug_print(f"Combined context length: {len(context)} characters")
+    debug_print(f"Context preview: {context[:300]}...")
     
     if not context.strip():
-        return "I don't have enough context to answer that question based on the processed websites."
+        return "The retrieved context appears to be empty. Please try processing the websites again."
     
     try:
-        # Prepare the prompt with the question and context
         prompt = ChatPromptTemplate.from_template(template)
         chain = prompt | model
         
-        # Generate the response
+        debug_print("Calling LLM...")
         response = chain.invoke({"question": question, "context": context})
         
-        return response.content if response.content else "I couldn't generate a response. Please try rephrasing your question."
+        debug_print(f"LLM response length: {len(response.content) if response.content else 0}")
+        debug_print(f"Response preview: {response.content[:200] if response.content else 'None'}...")
+        
+        if not response.content or not response.content.strip():
+            return "I received an empty response from the AI model. Please try rephrasing your question."
+        
+        return response.content
         
     except Exception as e:
+        debug_print(f"Error generating answer: {str(e)}", force=True)
         st.error(f"Error generating answer: {str(e)}")
-        return "Sorry, I encountered an error while generating the answer."
+        return f"Sorry, I encountered an error while generating the answer: {str(e)}"
 
-# Initialize session state variables
+# Initialize session state
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
-if "processed_documents" not in st.session_state:
-    st.session_state.processed_documents = False
-if "vector_store_populated" not in st.session_state:
-    st.session_state.vector_store_populated = False
-if "documents_added" not in st.session_state:
-    st.session_state.documents_added = False
+if "documents_processed" not in st.session_state:
+    st.session_state.documents_processed = False
 
-# Single URL processing
-website_url = st.text_input("Enter website URL:")
-process_button = st.button("Process Website")
+# Website processing interface
+st.header("Process Website")
+website_url = st.text_input("Enter website URL:", placeholder="https://example.com")
 
-if website_url and process_button:
-    if not website_url.startswith(('http://', 'https://')):
-        website_url = 'https://' + website_url
-    
-    try:
-        # Show progress indicator
-        with st.spinner(f"Processing website {website_url}..."):
-            # Process the website
-            documents = load_website(website_url)
+if st.button("🔄 Process Website", type="primary"):
+    if not website_url:
+        st.warning("Please enter a website URL")
+    else:
+        # Add protocol if missing
+        if not website_url.startswith(('http://', 'https://')):
+            website_url = 'https://' + website_url
+        
+        with st.spinner(f"Processing {website_url}..."):
+            # Step 1: Load website
+            st.write("📥 Loading website content...")
+            documents = load_website_simple(website_url)
             
-            if documents:
-                # Split text into chunks
-                chunked_documents = split_text(documents)
+            if not documents:
+                st.error("❌ Failed to load website content")
+                st.stop()
+            
+            st.success(f"✅ Loaded {len(documents)} documents from website")
+            
+            # Step 2: Split into chunks
+            st.write("✂️ Splitting into chunks...")
+            chunks = split_text_simple(documents)
+            
+            if not chunks:
+                st.error("❌ Failed to create text chunks")
+                st.stop()
+            
+            st.success(f"✅ Created {len(chunks)} text chunks")
+            
+            # Step 3: Create vector store
+            st.write("🔍 Creating searchable index...")
+            if create_vector_store(chunks):
+                st.success("✅ Successfully created searchable index!")
+                st.session_state.documents_processed = True
                 
-                if chunked_documents:
-                    # Index the documents
-                    if index_docs(chunked_documents):
-                        # Update session state
-                        st.session_state.processed_documents = True
-                        st.session_state.vector_store_populated = True
-                        st.session_state.documents_added = True
-                        
-                        # Display a success message with document count
-                        st.success(f"Successfully processed website: {website_url} ({len(chunked_documents)} chunks created)")
-                        
-                        # Show a sample of the extracted content
-                        with st.expander("Preview Extracted Content"):
-                            for i, doc in enumerate(chunked_documents[:3]):  # Show first 3 chunks only
-                                st.write(f"**Chunk {i+1} from {doc.metadata.get('source', 'unknown')}**")
-                                preview_content = doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
-                                st.text(preview_content)
-                                st.divider()
-                        
-                        # Display table preview (optional)
-                        table_docs = [doc for doc in chunked_documents if doc.metadata.get("type") == "table"]
-                        if table_docs:
-                            with st.expander("Preview Extracted Tables"):
-                                for i, doc in enumerate(table_docs[:3]):  # Show first 3 tables only
-                                    st.write(f"**Table from {doc.metadata.get('source', 'unknown')}**")
-                                    table_content = doc.page_content.replace("[TABLE] ", "")
-                                    st.text(table_content)
-                                    if i < len(table_docs[:3]) - 1:
-                                        st.divider()
-                    else:
-                        st.warning("Failed to index the extracted content.")
-                else:
-                    st.warning("No content chunks could be created from the website.")
+                # Show preview
+                with st.expander("📋 Preview processed content"):
+                    for i, chunk in enumerate(chunks[:3]):
+                        st.write(f"**Chunk {i+1}:**")
+                        st.text(chunk.page_content[:300] + "..." if len(chunk.page_content) > 300 else chunk.page_content)
+                        st.divider()
             else:
-                st.warning("No content could be extracted from the website.")
-    except Exception as e:
-        st.error(f"Error processing website: {str(e)}")
+                st.error("❌ Failed to create searchable index")
 
-# Multiple URLs processing
-with st.expander("Process Multiple URLs"):
-    multi_urls = st.text_area("Enter multiple URLs (one per line):")
-    process_multi_button = st.button("Process All URLs")
-    
-    if multi_urls and process_multi_button:
-        urls = [url.strip() for url in multi_urls.split("\n") if url.strip()]
-        
-        # Add https:// if missing
-        formatted_urls = []
-        for url in urls:
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            formatted_urls.append(url)
-        
-        processed_count = 0
-        total_chunks = 0
-        all_chunked_documents = []
-        
-        for url in formatted_urls:
-            try:
-                with st.spinner(f"Processing {url}..."):
-                    documents = load_website(url)
-                    if documents:
-                        chunked_documents = split_text(documents)
-                        if chunked_documents:
-                            all_chunked_documents.extend(chunked_documents)
-                            processed_count += 1
-                            total_chunks += len(chunked_documents)
-                            st.write(f"✅ Processed: {url} ({len(chunked_documents)} chunks)")
-                        else:
-                            st.write(f"⚠️ No chunks created from: {url}")
-                    else:
-                        st.write(f"⚠️ No content extracted from: {url}")
-            except Exception as e:
-                st.write(f"❌ Failed to process {url}: {str(e)}")
-        
-        if all_chunked_documents:
-            # Index all documents at once
-            if index_docs(all_chunked_documents):
-                st.session_state.processed_documents = True
-                st.session_state.vector_store_populated = True
-                st.session_state.documents_added = True
-                st.success(f"Successfully processed {processed_count} websites with a total of {total_chunks} chunks.")
-            else:
-                st.warning("No content could be indexed from the websites.")
-        else:
-            st.warning("No valid content was extracted from any of the websites.")
+# Test search functionality
+if st.session_state.documents_processed:
+    st.header("🔍 Test Search")
+    test_query = st.text_input("Enter a test search query:")
+    if st.button("Search") and test_query:
+        results = search_documents(test_query)
+        st.write(f"Found {len(results)} results:")
+        for i, doc in enumerate(results):
+            with st.expander(f"Result {i+1}"):
+                st.text(doc.page_content[:500])
 
 # Chat interface
-question = st.chat_input("Ask a question:")
-if question and st.session_state.vector_store_populated:
-    st.session_state.conversation_history.append({"role": "user", "content": question})
+st.header("💬 Chat")
+if st.session_state.documents_processed:
+    question = st.chat_input("Ask me anything about the processed website...")
     
-    # Get related documents
-    related_documents = retrieve_docs(question)
-    
-    # Debug information
-    with st.expander("Debug: Retrieved Context"):
-        st.write(f"Number of chunks retrieved: {len(related_documents)}")
-        for i, doc in enumerate(related_documents):
-            st.write(f"**Document {i+1} from {doc.metadata.get('source', 'unknown')}**")
-            preview_content = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-            st.text(preview_content)
-    
-    # Generate answer
-    answer = answer_question(question, related_documents)
-    st.session_state.conversation_history.append({"role": "assistant", "content": answer})
-    
-elif question and not st.session_state.vector_store_populated:
-    st.warning("Please process at least one website before asking questions.")
+    if question:
+        # Add user message
+        st.session_state.conversation_history.append({"role": "user", "content": question})
+        
+        # Search for relevant documents
+        with st.spinner("Searching for relevant information..."):
+            relevant_docs = search_documents(question)
+        
+        # Generate answer
+        with st.spinner("Generating answer..."):
+            answer = generate_answer(question, relevant_docs)
+        
+        # Add assistant message
+        st.session_state.conversation_history.append({"role": "assistant", "content": answer})
+else:
+    st.info("👆 Please process a website first before asking questions")
 
-# Display conversation history
+# Display conversation
 for message in st.session_state.conversation_history:
-    if message["role"] == "user":
-        st.chat_message("user").write(message["content"])
-    elif message["role"] == "assistant":
-        st.chat_message("assistant").write(message["content"])
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+# Clear conversation button
+if st.session_state.conversation_history:
+    if st.button("🗑️ Clear Conversation"):
+        st.session_state.conversation_history = []
+        st.experimental_rerun()
