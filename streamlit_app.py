@@ -13,6 +13,96 @@ import time
 import re
 from urllib.parse import urljoin, urlparse
 
+def filter_relevant_documents(document_links, query, ai_response):
+    """Filter and rank document links based on AI response content and semantic relevance"""
+    from difflib import SequenceMatcher
+    
+    # Combine query and AI response for context analysis
+    full_context = f"{query} {ai_response}".lower()
+    
+    # Extract key terms mentioned in AI response
+    response_terms = set()
+    
+    # Split response into words and extract meaningful terms
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', ai_response.lower())
+    for word in words:
+        if len(word) > 3 and word not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 'would', 'could', 'should']:
+            response_terms.add(word)
+    
+    # Extract phrases from AI response (2-4 word combinations)
+    sentences = re.split(r'[.!?]', ai_response)
+    response_phrases = set()
+    for sentence in sentences:
+        words = sentence.strip().split()
+        for i in range(len(words)-1):
+            if len(words) > i+1:
+                phrase = f"{words[i]} {words[i+1]}".lower().strip()
+                if len(phrase) > 5:
+                    response_phrases.add(phrase)
+    
+    scored_docs = []
+    for doc_link in document_links:
+        title_lower = doc_link['title'].lower()
+        score = 0
+        
+        # Method 1: Semantic similarity with AI response
+        similarity = SequenceMatcher(None, title_lower, full_context).ratio()
+        score += similarity * 20
+        
+        # Method 2: Term overlap analysis
+        doc_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
+        common_terms = response_terms.intersection(doc_words)
+        score += len(common_terms) * 3
+        
+        # Method 3: Phrase matching
+        for phrase in response_phrases:
+            if phrase in title_lower:
+                score += 8
+        
+        # Method 4: Context-based scoring
+        # Check if document title relates to topics mentioned in AI response
+        context_indicators = [
+            ('insurance', 5), ('act', 6), ('amendment', 7), ('circular', 5),
+            ('guideline', 4), ('regulation', 5), ('policy', 4), ('direction', 5),
+            ('framework', 4), ('rule', 4), ('notification', 4), ('order', 4)
+        ]
+        
+        for indicator, weight in context_indicators:
+            if indicator in full_context and indicator in title_lower:
+                score += weight
+        
+        # Method 5: Year and date relevance
+        years_in_context = re.findall(r'\b(20\d{2})\b', full_context)
+        years_in_title = re.findall(r'\b(20\d{2})\b', title_lower)
+        
+        for year in years_in_context:
+            if year in years_in_title:
+                score += 10
+        
+        # Method 6: Document type preference
+        if doc_link['type'] == 'document':  # Direct downloads
+            score += 5
+        
+        # Method 7: Penalize generic or irrelevant titles
+        generic_terms = ['home', 'index', 'main', 'general', 'common', 'page', 'site']
+        if any(term in title_lower for term in generic_terms):
+            score -= 5
+        
+        # Method 8: Boost if document title contains query terms
+        query_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', query.lower()))
+        title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
+        query_overlap = query_words.intersection(title_words)
+        score += len(query_overlap) * 2
+        
+        if score > 0:
+            doc_link['relevance_score'] = score
+            scored_docs.append(doc_link)
+    
+    # Sort by relevance score (highest first)
+    scored_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
+    
+    return scored_docs
+
 # Enhanced web scraping function
 def enhanced_web_scrape(url):
     """Enhanced web scraping with better headers and error handling"""
@@ -356,7 +446,7 @@ if st.button("Get Answer") and query:
             
             # Show source information with document links
             if show_retrieved and 'context' in response:
-                st.subheader("Sources and Related Documents:")
+                st.subheader("Sources and Relevant Documents:")
                 retrieved_docs = response.get('context', [])
                 sources = set()
                 all_document_links = []
@@ -376,23 +466,16 @@ if st.button("Get Answer") and query:
                 for source in sources:
                     st.write(f"• {source}")
                 
-                # Display document links categorized
+                # Filter and rank document links based on query relevance
                 if all_document_links:
-                    # Group by type
-                    pdf_docs = [link for link in all_document_links if link['type'] == 'document']
-                    ref_docs = [link for link in all_document_links if link['type'] in ['reference', 'content']]
+                    relevant_docs = filter_relevant_documents(all_document_links, query, response['answer'])
                     
-                    if pdf_docs:
-                        st.write("**📄 Direct Document Downloads:**")
-                        for i, link_info in enumerate(pdf_docs[:5]):
+                    if relevant_docs:
+                        st.write("**📄 Most Relevant Documents:**")
+                        for i, link_info in enumerate(relevant_docs[:3]):  # Show only top 3 most relevant
                             st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                    
-                    if ref_docs:
-                        st.write("**🔗 Related Document Pages:**")
-                        for i, link_info in enumerate(ref_docs[:8]):
-                            st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                else:
-                    st.write("**Related Documents:** No specific document links found in the retrieved content.")
+                    else:
+                        st.write("**Related Documents:** No documents specifically matching your query found.")
     else:
         st.warning("Please load and process documents first.")
 
