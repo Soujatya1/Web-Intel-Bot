@@ -61,14 +61,10 @@ def load_website_simple(url):
         # Configure RecursiveUrlLoader with appropriate settings
         loader = RecursiveUrlLoader(
             url=url,
-            max_depth=1,  # Only load the main page, not recursive links
+            max_depth=2,  # Only load the main page, not recursive links
             extractor=lambda x: BeautifulSoup(x, "html.parser").get_text(),
-            prevent_outside_links=True,
             use_async=False,
-            timeout=30,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+            timeout=30
         )
         
         documents = loader.load()
@@ -130,9 +126,63 @@ def load_website_simple(url):
         return documents
         
     except Exception as e:
-        debug_print(f"Error loading website: {str(e)}", force=True)
-        st.error(f"Failed to load {url}: {str(e)}")
-        return []
+        debug_print(f"Error with RecursiveUrlLoader: {str(e)}")
+        debug_print("Trying simplified RecursiveUrlLoader...")
+        
+        # Try with minimal parameters
+        try:
+            loader = RecursiveUrlLoader(url=url, max_depth=1)
+            documents = loader.load()
+            
+            if documents:
+                for i, doc in enumerate(documents):
+                    doc.metadata["source"] = url
+                    doc.metadata["type"] = "web_content"
+                    debug_print(f"Simple loader - Document {i}: {len(doc.page_content)} characters")
+                return documents
+        except Exception as e2:
+            debug_print(f"Simple RecursiveUrlLoader also failed: {str(e2)}")
+        
+        # Final fallback: Direct requests
+        debug_print("Falling back to direct requests...")
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remove script and style elements
+            for script in soup(["script", "style", "nav", "header", "footer"]):
+                script.decompose()
+            
+            # Get text content
+            text_content = soup.get_text()
+            
+            # Clean up text
+            lines = (line.strip() for line in text_content.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            debug_print(f"Direct extraction got {len(clean_text)} characters")
+            debug_print(f"Sample text: {clean_text[:200]}")
+            
+            if clean_text.strip():
+                documents = [Document(
+                    page_content=clean_text,
+                    metadata={"source": url, "type": "web_content"}
+                )]
+                return documents
+            else:
+                debug_print("No content extracted from direct method either")
+                return []
+                
+        except Exception as e3:
+            debug_print(f"All methods failed. Final error: {str(e3)}", force=True)
+            st.error(f"Failed to load {url}: All loading methods failed")
+            return []
 
 def split_text_simple(documents):
     """Simplified text splitting with debugging"""
