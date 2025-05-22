@@ -13,53 +13,29 @@ from langchain.document_loaders import WebBaseLoader
 import requests
 from bs4 import BeautifulSoup
 import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # Enhanced web scraping function
-def enhanced_web_scrape(url, use_selenium=False):
-    """Enhanced web scraping with options for JavaScript-heavy sites"""
-    content = ""
-    
-    if use_selenium:
-        try:
-            # Setup Chrome options for headless browsing
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            
-            driver = webdriver.Chrome(options=chrome_options)
-            driver.get(url)
-            
-            # Wait for content to load
-            time.sleep(3)
-            
-            # Get page content after JavaScript execution
-            content = driver.page_source
-            driver.quit()
-            
-        except Exception as e:
-            st.error(f"Selenium scraping failed: {e}")
-            # Fallback to requests
-            use_selenium = False
-    
-    if not use_selenium:
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            content = response.text
-        except Exception as e:
-            st.error(f"Regular scraping failed: {e}")
-            return None
-    
-    return content
+def enhanced_web_scrape(url):
+    """Enhanced web scraping with better headers and error handling"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+        }
+        
+        session = requests.Session()
+        session.headers.update(headers)
+        
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        return response.text
+        
+    except Exception as e:
+        st.error(f"Enhanced scraping failed for {url}: {e}")
+        return None
 
 def extract_structured_content(html_content, url):
     """Extract structured content with better parsing"""
@@ -109,7 +85,7 @@ api_key = "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"
 
 # Add options for enhanced scraping
 st.subheader("Scraping Options")
-use_enhanced_scraping = st.checkbox("Use Enhanced Scraping (for JavaScript-heavy sites)")
+use_enhanced_scraping = st.checkbox("Use Enhanced Scraping (better headers and session handling)")
 
 websites_input = st.text_area("Enter website URLs (one per line):")
 
@@ -126,7 +102,7 @@ if st.button("Load and Process"):
             
             if use_enhanced_scraping:
                 # Use enhanced scraping
-                html_content = enhanced_web_scrape(url, use_selenium=True)
+                html_content = enhanced_web_scrape(url)
                 if html_content:
                     clean_text, sections = extract_structured_content(html_content, url)
                     
