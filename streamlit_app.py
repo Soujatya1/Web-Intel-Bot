@@ -98,7 +98,8 @@ def filter_relevant_documents(document_links, query, ai_response):
         query_overlap = query_words.intersection(title_words)
         score += len(query_overlap) * 2
         
-        if score > 0:
+        # Only include documents with a minimum relevance threshold
+        if score >= 15:  # Increased threshold for better matching
             doc_link['relevance_score'] = score
             scored_docs.append(doc_link)
     
@@ -451,14 +452,24 @@ if st.button("Get Answer") and query:
             # Filter and rank document links based on query relevance
             relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
             
-            # Display response with relevant documents integrated
+            # Display response
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Add relevant documents as part of the normal response
+            # Add relevant documents only if they truly match the answer (higher threshold)
             if relevant_docs:
-                st.write("\n**📄 Most Relevant Documents:**")
+                st.write("\n**📄 Related Documents:**")
                 for i, link_info in enumerate(relevant_docs[:3]):  # Show top 3 most relevant
-                    st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                    st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
+            
+            # Add source information
+            st.write("\n**📍 Information Sources:**")
+            sources = set()
+            for doc in retrieved_docs:
+                source = doc.metadata.get('source', 'Unknown')
+                sources.add(source)
+            
+            for i, source in enumerate(sources, 1):
+                st.write(f"{i}. [{source}]({source})")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
