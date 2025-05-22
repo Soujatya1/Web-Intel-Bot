@@ -50,17 +50,13 @@ if st.button("Load and Process"):
   
    # LLM and Embeddings Initialization
    if api_key:
-       llm = ChatGroq(groq_api_key=api_key, model_name='meta-llama/llama-4-maverick-17b-128e-instruct', temperature=0.2, top_p=0.2)
+       llm = ChatGroq(groq_api_key=api_key, model_name='llama3-70b-8192', temperature=0.2, top_p=0.2)
        hf_embedding = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
  
        # Craft ChatPrompt Template
        prompt = ChatPromptTemplate.from_template(
           """
-           You are a Life Insurance specialist who needs to answer queries based on the information provided in the websites only. Please follow all the websites, and answer as per the same.
- 
-           Do not answer anything except from the website information which has been entered. Please do not skip any information from the tabular data in the website.
-
-           The websites contain information about multiple policies. Your task is to extract relevant features from the given websites and provide a clear comparison.
+           You are a website expert, who answers questions as per the websites entered and the correct set of documents retrieved.
  
            Do not skip any information from the context. Answer appropriately as per the query asked.
  
