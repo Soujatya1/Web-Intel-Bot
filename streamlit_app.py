@@ -57,6 +57,8 @@ if st.button("Load and Process"):
        prompt = ChatPromptTemplate.from_template(
           """
            You are a website expert, who answers questions as per the websites entered and the correct set of documents retrieved.
+
+           IMPORTANT: Pay attention to the "dates" on the websites for correct answering.
  
            Do not skip any information from the context. Answer appropriately as per the query asked.
  
