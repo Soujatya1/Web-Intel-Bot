@@ -18,95 +18,96 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"
 ]
 
 def filter_relevant_documents(document_links, query, ai_response):
-    """Filter and rank document links based on AI response content and semantic relevance"""
+    """Filter document links based ONLY on what's mentioned in the LLM response"""
     from difflib import SequenceMatcher
+    import re
     
-    # Combine query and AI response for context analysis
-    full_context = f"{query} {ai_response}".lower()
+    # Focus primarily on AI response content (not query)
+    response_lower = ai_response.lower()
     
-    # Extract key terms mentioned in AI response
-    response_terms = set()
+    # Extract specific entities mentioned in the LLM response
+    response_entities = set()
     
-    # Split response into words and extract meaningful terms
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', ai_response.lower())
-    for word in words:
-        if len(word) > 3 and word not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 'would', 'could', 'should']:
-            response_terms.add(word)
+    # Extract meaningful terms from LLM response (focus on nouns, proper nouns, technical terms)
+    meaningful_words = re.findall(r'\b[A-Za-z]{4,}\b', ai_response)
+    for word in meaningful_words:
+        word_lower = word.lower()
+        # Skip common words but keep domain-specific terms
+        if word_lower not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 
+                             'would', 'could', 'should', 'these', 'those', 'which', 'where', 
+                             'when', 'what', 'such', 'through', 'under', 'over', 'also']:
+            response_entities.add(word_lower)
     
-    # Extract phrases from AI response (2-4 word combinations)
-    sentences = re.split(r'[.!?]', ai_response)
+    # Extract specific patterns mentioned in response (Acts, years, specific terms)
+    act_patterns = re.findall(r'[A-Za-z\s]+act\s*\(?(\d{4})?\)?', ai_response, re.IGNORECASE)
+    year_patterns = re.findall(r'\b(19|20)\d{2}\b', ai_response)
+    
+    # Extract key phrases from response (2-3 word combinations)
     response_phrases = set()
+    sentences = re.split(r'[.!?;]', ai_response)
     for sentence in sentences:
         words = sentence.strip().split()
-        for i in range(len(words)-1):
-            if len(words) > i+1:
+        for i in range(len(words) - 1):
+            if i + 1 < len(words):
                 phrase = f"{words[i]} {words[i+1]}".lower().strip()
-                if len(phrase) > 5:
+                if len(phrase) > 6 and not any(stop_word in phrase for stop_word in ['the ', 'and ', 'for ', 'are ', 'this ', 'that ']):
                     response_phrases.add(phrase)
     
-    scored_docs = []
+    matched_docs = []
+    
     for doc_link in document_links:
         title_lower = doc_link['title'].lower()
-        score = 0
+        match_score = 0
+        match_reasons = []
         
-        # Method 1: Semantic similarity with AI response
-        similarity = SequenceMatcher(None, title_lower, full_context).ratio()
-        score += similarity * 20
+        # Primary matching: Direct entity overlap between response and document title
+        doc_words = set(re.findall(r'\b[A-Za-z]{4,}\b', title_lower))
+        entity_matches = response_entities.intersection(doc_words)
+        if entity_matches:
+            match_score += len(entity_matches) * 10
+            match_reasons.append(f"Entity matches: {list(entity_matches)}")
         
-        # Method 2: Term overlap analysis
-        doc_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
-        common_terms = response_terms.intersection(doc_words)
-        score += len(common_terms) * 3
-        
-        # Method 3: Phrase matching
+        # Phrase matching - very specific
+        phrase_matches = []
         for phrase in response_phrases:
             if phrase in title_lower:
-                score += 8
+                match_score += 15
+                phrase_matches.append(phrase)
         
-        # Method 4: Context-based scoring
-        # Check if document title relates to topics mentioned in AI response
-        context_indicators = [
-            ('insurance', 5), ('act', 6), ('amendment', 7), ('circular', 5),
-            ('guideline', 4), ('regulation', 5), ('policy', 4), ('direction', 5),
-            ('framework', 4), ('rule', 4), ('notification', 4), ('order', 4)
-        ]
+        if phrase_matches:
+            match_reasons.append(f"Phrase matches: {phrase_matches}")
         
-        for indicator, weight in context_indicators:
-            if indicator in full_context and indicator in title_lower:
-                score += weight
+        # Year matching - if LLM mentions specific years
+        if year_patterns:
+            doc_years = re.findall(r'\b(19|20)\d{2}\b', title_lower)
+            year_matches = set(year_patterns).intersection(set(doc_years))
+            if year_matches:
+                match_score += 20
+                match_reasons.append(f"Year matches: {list(year_matches)}")
         
-        # Method 5: Year and date relevance
-        years_in_context = re.findall(r'\b(20\d{2})\b', full_context)
-        years_in_title = re.findall(r'\b(20\d{2})\b', title_lower)
+        # Act/regulation specific matching - only if LLM mentions acts/regulations
+        if any(term in response_lower for term in ['act', 'regulation', 'circular', 'amendment', 'guideline']):
+            if any(term in title_lower for term in ['act', 'regulation', 'circular', 'amendment', 'guideline']):
+                match_score += 8
+                match_reasons.append("Document type match with response")
         
-        for year in years_in_context:
-            if year in years_in_title:
-                score += 10
+        # Semantic similarity as final check (only for high-scoring documents)
+        if match_score > 0:
+            similarity = SequenceMatcher(None, title_lower, response_lower).ratio()
+            if similarity > 0.3:  # High similarity threshold
+                match_score += similarity * 10
+                match_reasons.append(f"High semantic similarity: {similarity:.2f}")
         
-        # Method 6: Document type preference
-        if doc_link['type'] == 'document':  # Direct downloads
-            score += 5
-        
-        # Method 7: Penalize generic or irrelevant titles
-        generic_terms = ['home', 'index', 'main', 'general', 'common', 'page', 'site']
-        if any(term in title_lower for term in generic_terms):
-            score -= 5
-        
-        # Method 8: Boost if document title contains query terms
-        query_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', query.lower()))
-        title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
-        query_overlap = query_words.intersection(title_words)
-        score += len(query_overlap) * 2
-        
-        # Only include documents with a minimum relevance threshold
-        if score >= 15:  # Increased threshold for better matching
-            doc_link['relevance_score'] = score
-            scored_docs.append(doc_link)
+        # Only include documents that have substantial matches with the LLM response
+        if match_score >= 25:  # High threshold - only truly matching documents
+            doc_link['relevance_score'] = match_score
+            doc_link['match_reasons'] = match_reasons
+            matched_docs.append(doc_link)
     
-    # Sort by relevance score (highest first)
-    scored_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
+    # Sort by match score (highest first)
+    matched_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
     
-    return scored_docs
+    return matched_docs
 
 # Enhanced web scraping function
 def enhanced_web_scrape(url):
