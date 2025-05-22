@@ -14,16 +14,97 @@ import re
 from urllib.parse import urljoin, urlparse
 
 # Hardcoded websites - modify these as needed
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"
-]
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"]
+
+def is_query_domain_relevant(query, domain_keywords):
+    """Check if the query is relevant to the domain (insurance/regulatory)"""
+    query_lower = query.lower()
+    
+    # Insurance/regulatory domain keywords
+    insurance_keywords = [
+        'insurance', 'irdai', 'policy', 'premium', 'claim', 'regulation', 'act', 
+        'circular', 'guideline', 'amendment', 'notification', 'regulatory', 
+        'coverage', 'underwriting', 'reinsurance', 'broker', 'agent', 'policyholder',
+        'solvency', 'capital', 'reserve', 'compliance', 'audit', 'financial',
+        'motor insurance', 'health insurance', 'life insurance', 'general insurance',
+        'micro insurance', 'crop insurance', 'marine insurance', 'fire insurance'
+    ]
+    
+    # Check for domain relevance
+    domain_match_count = sum(1 for keyword in insurance_keywords if keyword in query_lower)
+    
+    # If no domain keywords found, it's likely irrelevant
+    if domain_match_count == 0:
+        # Additional check for very generic queries
+        generic_patterns = [
+            r'\bwho is\b', r'\bwhat is.*(?:actor|movie|film|celebrity|person)\b',
+            r'\btell me about.*(?:person|people|celebrity|actor|actress)\b',
+            r'\b(?:biography|bio|personal life|career|films|movies)\b'
+        ]
+        
+        for pattern in generic_patterns:
+            if re.search(pattern, query_lower):
+                return False
+        
+        # Check if it's asking about a person (likely not domain relevant)
+        person_indicators = ['who is', 'biography', 'born in', 'age of', 'actor', 'actress', 'celebrity']
+        if any(indicator in query_lower for indicator in person_indicators):
+            return False
+    
+    return domain_match_count > 0
+
+def assess_answer_quality(answer, query):
+    """Assess if the answer actually addresses the query with domain-relevant information"""
+    answer_lower = answer.lower()
+    query_lower = query.lower()
+    
+    # Check for the standard fallback message
+    fallback_indicators = [
+        "fall outside the scope",
+        "not found in the provided context",
+        "no specific information",
+        "context provided does not contain",
+        "information is not available"
+    ]
+    
+    has_fallback = any(indicator in answer_lower for indicator in fallback_indicators)
+    
+    # Check if answer contains domain-relevant information
+    domain_keywords = [
+        'insurance', 'irdai', 'act', 'regulation', 'policy', 'circular',
+        'guideline', 'amendment', 'compliance', 'regulatory'
+    ]
+    
+    domain_content_count = sum(1 for keyword in domain_keywords if keyword in answer_lower)
+    
+    # If it's a fallback answer with no domain content, don't show related docs
+    if has_fallback and domain_content_count < 2:
+        return False
+    
+    # If query was about a person but answer talks about insurance, it's forced
+    person_query_indicators = ['who is', 'biography', 'tell me about']
+    if any(indicator in query_lower for indicator in person_query_indicators):
+        if domain_content_count > 0:  # Answer forced domain content
+            return False
+    
+    return True
 
 def filter_relevant_documents(document_links, query, ai_response):
-    """Filter document links based ONLY on what's mentioned in the LLM response"""
+    """Enhanced filtering - only show documents if truly relevant to both query and answer"""
     from difflib import SequenceMatcher
     import re
     
+    # First check if query is domain relevant
+    if not is_query_domain_relevant(query, []):
+        return []
+    
+    # Check if answer quality justifies showing documents
+    if not assess_answer_quality(ai_response, query):
+        return []
+    
     # Focus primarily on AI response content (not query)
     response_lower = ai_response.lower()
+    query_lower = query.lower()
     
     # Extract specific entities mentioned in the LLM response
     response_entities = set()
@@ -35,7 +116,8 @@ def filter_relevant_documents(document_links, query, ai_response):
         # Skip common words but keep domain-specific terms
         if word_lower not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 
                              'would', 'could', 'should', 'these', 'those', 'which', 'where', 
-                             'when', 'what', 'such', 'through', 'under', 'over', 'also']:
+                             'when', 'what', 'such', 'through', 'under', 'over', 'also', 'information',
+                             'provided', 'context', 'question', 'details', 'scope', 'trained']:
             response_entities.add(word_lower)
     
     # Extract specific patterns mentioned in response (Acts, years, specific terms)
@@ -50,7 +132,7 @@ def filter_relevant_documents(document_links, query, ai_response):
         for i in range(len(words) - 1):
             if i + 1 < len(words):
                 phrase = f"{words[i]} {words[i+1]}".lower().strip()
-                if len(phrase) > 6 and not any(stop_word in phrase for stop_word in ['the ', 'and ', 'for ', 'are ', 'this ', 'that ']):
+                if len(phrase) > 6 and not any(stop_word in phrase for stop_word in ['the ', 'and ', 'for ', 'are ', 'this ', 'that ', 'information ', 'context ', 'provided ']):
                     response_phrases.add(phrase)
     
     matched_docs = []
@@ -64,13 +146,16 @@ def filter_relevant_documents(document_links, query, ai_response):
         doc_words = set(re.findall(r'\b[A-Za-z]{4,}\b', title_lower))
         entity_matches = response_entities.intersection(doc_words)
         if entity_matches:
-            match_score += len(entity_matches) * 10
-            match_reasons.append(f"Entity matches: {list(entity_matches)}")
+            # Filter out generic entities
+            meaningful_entities = [e for e in entity_matches if e not in ['information', 'context', 'provided', 'question', 'details']]
+            if meaningful_entities:
+                match_score += len(meaningful_entities) * 10
+                match_reasons.append(f"Entity matches: {meaningful_entities}")
         
         # Phrase matching - very specific
         phrase_matches = []
         for phrase in response_phrases:
-            if phrase in title_lower:
+            if phrase in title_lower and len(phrase) > 8:  # Longer phrases only
                 match_score += 15
                 phrase_matches.append(phrase)
         
@@ -86,10 +171,15 @@ def filter_relevant_documents(document_links, query, ai_response):
                 match_reasons.append(f"Year matches: {list(year_matches)}")
         
         # Act/regulation specific matching - only if LLM mentions acts/regulations
-        if any(term in response_lower for term in ['act', 'regulation', 'circular', 'amendment', 'guideline']):
-            if any(term in title_lower for term in ['act', 'regulation', 'circular', 'amendment', 'guideline']):
-                match_score += 8
-                match_reasons.append("Document type match with response")
+        domain_terms_in_response = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
+        domain_terms_in_title = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
+        
+        response_has_domain = any(term in response_lower for term in domain_terms_in_response)
+        title_has_domain = any(term in title_lower for term in domain_terms_in_title)
+        
+        if response_has_domain and title_has_domain:
+            match_score += 8
+            match_reasons.append("Document type match with response")
         
         # Semantic similarity as final check (only for high-scoring documents)
         if match_score > 0:
@@ -98,8 +188,8 @@ def filter_relevant_documents(document_links, query, ai_response):
                 match_score += similarity * 10
                 match_reasons.append(f"High semantic similarity: {similarity:.2f}")
         
-        # Only include documents that have substantial matches with the LLM response
-        if match_score >= 25:  # High threshold - only truly matching documents
+        # Much higher threshold - only truly matching documents
+        if match_score >= 35:  # Increased threshold
             doc_link['relevance_score'] = match_score
             doc_link['match_reasons'] = match_reasons
             matched_docs.append(doc_link)
@@ -385,9 +475,11 @@ if not st.session_state['docs_loaded']:
                 # Enhanced prompt for IRDAI-specific queries with document links
                 prompt = ChatPromptTemplate.from_template(
                     """
-                    You are Website expert assistant.
+                    You are an Insurance and Regulatory expert assistant specializing in IRDAI (Insurance Regulatory and Development Authority of India) information.
                     
                     IMPORTANT INSTRUCTIONS:
+                    - Only answer questions related to insurance, regulations, acts, policies, and IRDAI matters
+                    - If a question is completely outside the insurance/regulatory domain (like asking about celebrities, movies, general knowledge), respond with: "I'm specialized in insurance and regulatory matters. Please ask questions related to insurance policies, IRDAI regulations, acts, circulars, or other insurance-related topics."
                     - Pay special attention to dates, recent updates, and chronological information
                     - When asked about "what's new" or recent developments, focus on the most recent information available
                     - Look for press releases, circulars, guidelines, and policy updates
@@ -395,9 +487,9 @@ if not st.session_state['docs_loaded']:
                     - If you find dated information, mention the specific dates
                     - When mentioning any acts, circulars, or regulations, try to reference the available document links
                     
-                    Based on the context provided from the website(s), answer the user's question accurately and comprehensively.
+                    Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
 
-                    If no context for a question is not found, or no answer is generated, the response should show: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+                    If the question is insurance-related but specific details are not found in the context, respond with: "Thank you for your question about insurance/regulatory matters. While the specific details you've asked for aren't available in my current dataset, I can provide related information that might be helpful based on the available regulatory documents and guidelines."
                     
                     <context>
                     {context}
@@ -439,38 +531,48 @@ if st.button("Get Answer") and query:
         with st.spinner("Searching and generating answer..."):
             response = st.session_state['retrieval_chain'].invoke({"input": query})
             
-            # Get relevant documents first
-            retrieved_docs = response.get('context', [])
-            all_document_links = []
-            
-            for doc in retrieved_docs:
-                # Extract document links from metadata
-                if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                    for link_info in doc.metadata['sections']['document_links']:
-                        if link_info not in all_document_links:
-                            all_document_links.append(link_info)
-            
-            # Filter and rank document links based on query relevance
-            relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
-            
-            # Display response
+            # Display response first
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Add relevant documents only if they truly match the answer (higher threshold)
-            if relevant_docs:
-                st.write("\n**📄 Related Documents:**")
-                for i, link_info in enumerate(relevant_docs[:3]):  # Show top 3 most relevant
-                    st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
+            # Check if query is domain relevant and answer quality is good
+            show_additional_info = (
+                is_query_domain_relevant(query, []) and 
+                assess_answer_quality(response['answer'], query)
+            )
             
-            # Add source information
-            st.write("\n**📍 Information Sources:**")
-            sources = set()
-            for doc in retrieved_docs:
-                source = doc.metadata.get('source', 'Unknown')
-                sources.add(source)
-            
-            for i, source in enumerate(sources, 1):
-                st.write(f"{i}. [{source}]({source})")
+            if show_additional_info:
+                # Get relevant documents
+                retrieved_docs = response.get('context', [])
+                all_document_links = []
+                
+                for doc in retrieved_docs:
+                    # Extract document links from metadata
+                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
+                        for link_info in doc.metadata['sections']['document_links']:
+                            if link_info not in all_document_links:
+                                all_document_links.append(link_info)
+                
+                # Filter and rank document links based on query relevance
+                relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+                
+                # Add relevant documents only if they truly match the answer
+                if relevant_docs:
+                    st.write("\n**📄 Related Documents:**")
+                    for i, link_info in enumerate(relevant_docs[:3]):  # Show top 3 most relevant
+                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
+                
+                # Add source information only for domain-relevant queries
+                st.write("\n**📍 Information Sources:**")
+                sources = set()
+                for doc in retrieved_docs:
+                    source = doc.metadata.get('source', 'Unknown')
+                    sources.add(source)
+                
+                for i, source in enumerate(sources, 1):
+                    st.write(f"{i}. [{source}]({source})")
+            else:
+                # For irrelevant queries, don't show additional information
+                st.write("\n*Note: For insurance and regulatory queries, additional document links and sources will be provided.*")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
