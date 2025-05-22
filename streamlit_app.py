@@ -57,10 +57,34 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:  # Only include substantial content
                 content_sections['news'].append(text)
     
-    # Extract subtitles with links
+    # Extract subtitles with links - Enhanced approach
     content_sections['subtitle_links'] = []
     
-    # Look for various heading tags that might contain links
+    # Method 1: Look for all links with substantial text
+    all_links = soup.find_all('a', href=True)
+    for link in all_links:
+        link_text = link.get_text(strip=True)
+        link_href = link.get('href')
+        
+        # Filter for substantial link text (likely titles/subtitles)
+        if len(link_text) > 5 and len(link_text) < 300:
+            # Convert relative URLs to absolute URLs
+            if link_href.startswith('/'):
+                from urllib.parse import urljoin
+                link_href = urljoin(url, link_href)
+            elif not link_href.startswith(('http://', 'https://')):
+                from urllib.parse import urljoin
+                link_href = urljoin(url, link_href)
+            
+            # Skip common navigation links
+            skip_keywords = ['home', 'contact', 'about', 'login', 'register', 'search']
+            if not any(keyword in link_text.lower() for keyword in skip_keywords):
+                content_sections['subtitle_links'].append({
+                    'title': link_text,
+                    'link': link_href
+                })
+    
+    # Method 2: Look for heading tags that might contain or be near links
     for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
         # Check if heading contains a link
         link = heading.find('a')
@@ -72,7 +96,7 @@ def extract_structured_content(html_content, url):
             if link_href.startswith('/'):
                 from urllib.parse import urljoin
                 link_href = urljoin(url, link_href)
-            elif not link_href.startswith('http'):
+            elif not link_href.startswith(('http://', 'https://')):
                 from urllib.parse import urljoin
                 link_href = urljoin(url, link_href)
             
@@ -80,28 +104,37 @@ def extract_structured_content(html_content, url):
                 'title': subtitle_text,
                 'link': link_href
             })
-    
-    # Also look for linked titles in list items or divs
-    for element in soup.find_all(['li', 'div']):
-        link = element.find('a')
-        if link and link.get('href'):
-            element_text = element.get_text(strip=True)
-            link_href = link.get('href')
+        
+        # Check if there's a link right after the heading
+        next_sibling = heading.find_next_sibling()
+        if next_sibling and next_sibling.name == 'a':
+            subtitle_text = heading.get_text(strip=True)
+            link_href = next_sibling.get('href')
             
-            # Filter for substantial content that looks like titles
-            if len(element_text) > 10 and len(element_text) < 200:
+            if link_href:
                 # Convert relative URLs to absolute URLs
                 if link_href.startswith('/'):
                     from urllib.parse import urljoin
                     link_href = urljoin(url, link_href)
-                elif not link_href.startswith('http'):
+                elif not link_href.startswith(('http://', 'https://')):
                     from urllib.parse import urljoin
                     link_href = urljoin(url, link_href)
                 
                 content_sections['subtitle_links'].append({
-                    'title': element_text,
+                    'title': subtitle_text,
                     'link': link_href
                 })
+    
+    # Remove duplicates while preserving order
+    seen_links = set()
+    unique_subtitle_links = []
+    for link_info in content_sections['subtitle_links']:
+        link_key = (link_info['title'], link_info['link'])
+        if link_key not in seen_links:
+            seen_links.add(link_key)
+            unique_subtitle_links.append(link_info)
+    
+    content_sections['subtitle_links'] = unique_subtitle_links
     
     # Extract all text content
     main_text = soup.get_text()
@@ -156,6 +189,14 @@ if st.button("Load and Process"):
                     with st.expander(f"News/Updates found from {url}"):
                         for i, news_item in enumerate(sections['news'][:3]):
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
+                
+                # Show extracted subtitle links
+                if sections.get('subtitle_links'):
+                    with st.expander(f"Subtitle Links found from {url}"):
+                        for i, link_info in enumerate(sections['subtitle_links'][:5]):
+                            st.write(f"**Link {i+1}:** [{link_info['title']}]({link_info['link']})")
+                else:
+                    st.write(f"No subtitle links found from {url}")
             
             st.success(f"Successfully loaded content from {url}")
             
