@@ -395,7 +395,7 @@ if not st.session_state['docs_loaded']:
                     
                     Based on the context provided from the website(s), answer the user's question accurately and comprehensively.
 
-                    If no context for a question is not found, or no answer is generated, the response should show: "Thank you for your question. The details you’ve asked for fall outside the scope of the data I’ve been trained on. However, I’ve gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+                    If no context for a question is not found, or no answer is generated, the response should show: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                     
                     <context>
                     {context}
@@ -432,8 +432,6 @@ if not st.session_state['docs_loaded']:
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
-show_retrieved = st.checkbox("Show retrieved documents with answer", value=True)
-
 if st.button("Get Answer") and query:
     if st.session_state['retrieval_chain']:
         with st.spinner("Searching and generating answer..."):
@@ -462,19 +460,5 @@ if st.button("Get Answer") and query:
                 st.write("\n**📄 Most Relevant Documents:**")
                 for i, link_info in enumerate(relevant_docs[:3]):  # Show top 3 most relevant
                     st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-            
-            # Show source information only if checkbox is checked
-            if show_retrieved and 'context' in response:
-                st.subheader("Sources:")
-                sources = set()
-                
-                for doc in retrieved_docs:
-                    source = doc.metadata.get('source', 'Unknown')
-                    sources.add(source)
-                
-                # Display sources
-                st.write("**Source Websites:**")
-                for source in sources:
-                    st.write(f"• {source}")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
