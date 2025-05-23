@@ -413,7 +413,7 @@ if not st.session_state['docs_loaded']:
                     
                     IMPORTANT INSTRUCTIONS:
                     - Only answer questions related to insurance, regulations, acts, policies, and IRDAI matters
-                    - If a question is completely outside the insurance/regulatory domain (like asking about celebrities, movies, general knowledge), respond with: "I'm specialized in insurance and regulatory matters. Please ask questions related to insurance policies, IRDAI regulations, acts, circulars, or other insurance-related topics."
+                    - If a question is completely outside the insurance/regulatory domain (like asking about celebrities, movies, general knowledge), respond with: "Thank you for your question about insurance/regulatory matters. While the specific details you've asked for aren't available in my current dataset, I can provide related information that might be helpful based on the available regulatory documents and guidelines."
                     - Pay special attention to dates, recent updates, and chronological information
                     - When asked about "what's new" or recent developments, focus on the most recent information available
                     - Look for press releases, circulars, guidelines, and policy updates
@@ -423,7 +423,7 @@ if not st.session_state['docs_loaded']:
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
 
-                    If the question is insurance-related but specific details are not found in the context, respond with: "Thank you for your question about insurance/regulatory matters. While the specific details you've asked for aren't available in my current dataset, I can provide related information that might be helpful based on the available regulatory documents and guidelines."
+                    
                     
                     <context>
                     {context}
