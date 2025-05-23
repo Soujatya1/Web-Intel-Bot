@@ -12,15 +12,43 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
+from difflib import SequenceMatcher
 
-# Hardcoded websites - modify these as needed
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"]
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules", 
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements.html",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa"
+                     ]
 
 def is_query_domain_relevant(query, domain_keywords):
-    """Check if the query is relevant to the domain (insurance/regulatory)"""
     query_lower = query.lower()
     
-    # Insurance/regulatory domain keywords
     insurance_keywords = [
         'insurance', 'irdai', 'policy', 'premium', 'claim', 'regulation', 'act', 
         'circular', 'guideline', 'amendment', 'notification', 'regulatory', 
@@ -30,12 +58,9 @@ def is_query_domain_relevant(query, domain_keywords):
         'micro insurance', 'crop insurance', 'marine insurance', 'fire insurance'
     ]
     
-    # Check for domain relevance
     domain_match_count = sum(1 for keyword in insurance_keywords if keyword in query_lower)
     
-    # If no domain keywords found, it's likely irrelevant
     if domain_match_count == 0:
-        # Additional check for very generic queries
         generic_patterns = [
             r'\bwho is\b', r'\bwhat is.*(?:actor|movie|film|celebrity|person)\b',
             r'\btell me about.*(?:person|people|celebrity|actor|actress)\b',
@@ -46,7 +71,6 @@ def is_query_domain_relevant(query, domain_keywords):
             if re.search(pattern, query_lower):
                 return False
         
-        # Check if it's asking about a person (likely not domain relevant)
         person_indicators = ['who is', 'biography', 'born in', 'age of', 'actor', 'actress', 'celebrity']
         if any(indicator in query_lower for indicator in person_indicators):
             return False
@@ -54,11 +78,9 @@ def is_query_domain_relevant(query, domain_keywords):
     return domain_match_count > 0
 
 def assess_answer_quality(answer, query):
-    """Assess if the answer actually addresses the query with domain-relevant information"""
     answer_lower = answer.lower()
     query_lower = query.lower()
     
-    # Check for the standard fallback message
     fallback_indicators = [
         "fall outside the scope",
         "not found in the provided context",
@@ -69,7 +91,6 @@ def assess_answer_quality(answer, query):
     
     has_fallback = any(indicator in answer_lower for indicator in fallback_indicators)
     
-    # Check if answer contains domain-relevant information
     domain_keywords = [
         'insurance', 'irdai', 'act', 'regulation', 'policy', 'circular',
         'guideline', 'amendment', 'compliance', 'regulatory'
@@ -77,54 +98,41 @@ def assess_answer_quality(answer, query):
     
     domain_content_count = sum(1 for keyword in domain_keywords if keyword in answer_lower)
     
-    # If it's a fallback answer with no domain content, don't show related docs
     if has_fallback and domain_content_count < 2:
         return False
     
-    # If query was about a person but answer talks about insurance, it's forced
     person_query_indicators = ['who is', 'biography', 'tell me about']
     if any(indicator in query_lower for indicator in person_query_indicators):
-        if domain_content_count > 0:  # Answer forced domain content
+        if domain_content_count > 0:
             return False
     
     return True
 
 def filter_relevant_documents(document_links, query, ai_response):
-    """Enhanced filtering - only show documents if truly relevant to both query and answer"""
-    from difflib import SequenceMatcher
-    import re
     
-    # First check if query is domain relevant
     if not is_query_domain_relevant(query, []):
         return []
     
-    # Check if answer quality justifies showing documents
     if not assess_answer_quality(ai_response, query):
         return []
     
-    # Focus primarily on AI response content (not query)
     response_lower = ai_response.lower()
     query_lower = query.lower()
     
-    # Extract specific entities mentioned in the LLM response
     response_entities = set()
     
-    # Extract meaningful terms from LLM response (focus on nouns, proper nouns, technical terms)
     meaningful_words = re.findall(r'\b[A-Za-z]{4,}\b', ai_response)
     for word in meaningful_words:
         word_lower = word.lower()
-        # Skip common words but keep domain-specific terms
         if word_lower not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 
                              'would', 'could', 'should', 'these', 'those', 'which', 'where', 
                              'when', 'what', 'such', 'through', 'under', 'over', 'also', 'information',
                              'provided', 'context', 'question', 'details', 'scope', 'trained']:
             response_entities.add(word_lower)
     
-    # Extract specific patterns mentioned in response (Acts, years, specific terms)
     act_patterns = re.findall(r'[A-Za-z\s]+act\s*\(?(\d{4})?\)?', ai_response, re.IGNORECASE)
     year_patterns = re.findall(r'\b(19|20)\d{2}\b', ai_response)
     
-    # Extract key phrases from response (2-3 word combinations)
     response_phrases = set()
     sentences = re.split(r'[.!?;]', ai_response)
     for sentence in sentences:
@@ -142,27 +150,23 @@ def filter_relevant_documents(document_links, query, ai_response):
         match_score = 0
         match_reasons = []
         
-        # Primary matching: Direct entity overlap between response and document title
         doc_words = set(re.findall(r'\b[A-Za-z]{4,}\b', title_lower))
         entity_matches = response_entities.intersection(doc_words)
         if entity_matches:
-            # Filter out generic entities
             meaningful_entities = [e for e in entity_matches if e not in ['information', 'context', 'provided', 'question', 'details']]
             if meaningful_entities:
                 match_score += len(meaningful_entities) * 10
                 match_reasons.append(f"Entity matches: {meaningful_entities}")
         
-        # Phrase matching - very specific
         phrase_matches = []
         for phrase in response_phrases:
-            if phrase in title_lower and len(phrase) > 8:  # Longer phrases only
+            if phrase in title_lower and len(phrase) > 8:
                 match_score += 15
                 phrase_matches.append(phrase)
         
         if phrase_matches:
             match_reasons.append(f"Phrase matches: {phrase_matches}")
         
-        # Year matching - if LLM mentions specific years
         if year_patterns:
             doc_years = re.findall(r'\b(19|20)\d{2}\b', title_lower)
             year_matches = set(year_patterns).intersection(set(doc_years))
@@ -170,7 +174,6 @@ def filter_relevant_documents(document_links, query, ai_response):
                 match_score += 20
                 match_reasons.append(f"Year matches: {list(year_matches)}")
         
-        # Act/regulation specific matching - only if LLM mentions acts/regulations
         domain_terms_in_response = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
         domain_terms_in_title = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
         
@@ -181,27 +184,22 @@ def filter_relevant_documents(document_links, query, ai_response):
             match_score += 8
             match_reasons.append("Document type match with response")
         
-        # Semantic similarity as final check (only for high-scoring documents)
         if match_score > 0:
             similarity = SequenceMatcher(None, title_lower, response_lower).ratio()
-            if similarity > 0.3:  # High similarity threshold
+            if similarity > 0.3:
                 match_score += similarity * 10
                 match_reasons.append(f"High semantic similarity: {similarity:.2f}")
         
-        # Much higher threshold - only truly matching documents
-        if match_score >= 35:  # Increased threshold
+        if match_score >= 35:
             doc_link['relevance_score'] = match_score
             doc_link['match_reasons'] = match_reasons
             matched_docs.append(doc_link)
     
-    # Sort by match score (highest first)
     matched_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
     
     return matched_docs
 
-# Enhanced web scraping function
 def enhanced_web_scrape(url):
-    """Enhanced web scraping with better headers and error handling"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -225,13 +223,11 @@ def enhanced_web_scrape(url):
 def extract_document_links(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Remove script and style elements
     for script in soup(["script", "style"]):
         script.decompose()
     
     document_links = []
     
-    # Method 1: Look for links that end with document extensions
     document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
     
     all_links = soup.find_all('a', href=True)
@@ -239,20 +235,16 @@ def extract_document_links(html_content, url):
         href = link.get('href')
         link_text = link.get_text(strip=True)
         
-        # Skip empty links or very short text
         if not href or len(link_text) < 3:
             continue
             
-        # Convert relative URLs to absolute URLs
         if href.startswith('/'):
             href = urljoin(url, href)
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        # Check if it's a document link
         is_document_link = any(ext in href.lower() for ext in document_extensions)
         
-        # Also check for common document-related keywords in the link text
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
                            'notification', 'order', 'policy', 'master', 'framework', 'directive']
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
@@ -264,15 +256,12 @@ def extract_document_links(html_content, url):
                 'type': 'document' if is_document_link else 'content'
             })
     
-    # Method 2: Look for table rows containing document information
-    # This specifically targets IRDAI's tabular format
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            if len(cells) >= 3:  # Assuming at least 3 columns like in your screenshot
-                # Look for subtitle column (usually contains the document title)
+            if len(cells) >= 3:
                 for cell in cells:
                     links_in_cell = cell.find_all('a', href=True)
                     for link in links_in_cell:
@@ -282,21 +271,19 @@ def extract_document_links(html_content, url):
                         if not href or len(link_text) < 5:
                             continue
                             
-                        # Convert relative URLs to absolute URLs
                         if href.startswith('/'):
                             href = urljoin(url, href)
                         elif not href.startswith(('http://', 'https://')):
                             href = urljoin(url, href)
                         
-                        # Check if it looks like a document reference
                         document_patterns = [
-                            r'act.*\d{4}',  # Act with year
-                            r'circular.*\d+',  # Circular with number
-                            r'amendment.*act',  # Amendment act
-                            r'insurance.*act',  # Insurance act
-                            r'guideline',  # Guidelines
-                            r'master.*direction',  # Master directions
-                            r'regulation.*\d+'  # Regulations with numbers
+                            r'act.*\d{4}',
+                            r'circular.*\d+',
+                            r'amendment.*act',
+                            r'insurance.*act',
+                            r'guideline',
+                            r'master.*direction',
+                            r'regulation.*\d+'
                         ]
                         
                         is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
@@ -309,10 +296,8 @@ def extract_document_links(html_content, url):
                                 'type': 'document' if is_document_extension else 'reference'
                             })
     
-    # Method 3: Look for specific IRDAI document patterns in div/section structures
     content_sections = soup.find_all(['div', 'section', 'article'])
     for section in content_sections:
-        # Look for sections that might contain document listings
         section_text = section.get_text().lower()
         if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
             links_in_section = section.find_all('a', href=True)
@@ -323,13 +308,11 @@ def extract_document_links(html_content, url):
                 if not href or len(link_text) < 5:
                     continue
                 
-                # Convert relative URLs to absolute URLs
                 if href.startswith('/'):
                     href = urljoin(url, href)
                 elif not href.startswith(('http://', 'https://')):
                     href = urljoin(url, href)
                 
-                # Filter for substantial document-like content
                 if len(link_text) > 10 and len(link_text) < 200:
                     document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
                                        'amendment', 'notification', 'insurance', 'policy']
@@ -340,7 +323,6 @@ def extract_document_links(html_content, url):
                             'type': 'reference'
                         })
     
-    # Remove duplicates while preserving order
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -349,23 +331,18 @@ def extract_document_links(html_content, url):
             seen_links.add(link_key)
             unique_document_links.append(link_info)
     
-    # Sort by type: documents first, then references
     unique_document_links.sort(key=lambda x: (x['type'] != 'document', x['title']))
     
     return unique_document_links
 
 def extract_structured_content(html_content, url):
-    """Extract structured content with better parsing and document links"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Remove script and style elements
     for script in soup(["script", "style"]):
         script.decompose()
     
-    # Extract different sections
     content_sections = {}
     
-    # Look for news/updates sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -374,65 +351,55 @@ def extract_structured_content(html_content, url):
         content_sections['news'] = []
         for section in news_sections:
             text = section.get_text(strip=True)
-            if len(text) > 50:  # Only include substantial content
+            if len(text) > 50:
                 content_sections['news'].append(text)
     
-    # Extract document links using our enhanced function
     content_sections['document_links'] = extract_document_links(html_content, url)
     
-    # Extract all text content
     main_text = soup.get_text()
     
-    # Clean up text
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
     
     return clean_text, content_sections
 
-# Function to load hardcoded websites
 def load_hardcoded_websites():
-    """Load and process hardcoded websites"""
     loaded_docs = []
     
     for url in HARDCODED_WEBSITES:
         try:
             st.write(f"Loading URL: {url}")
             
-            # Use enhanced scraping
             html_content = enhanced_web_scrape(url)
             if html_content:
                 clean_text, sections = extract_structured_content(html_content, url)
                 
-                # Create document object
                 doc = Document(
                     page_content=clean_text,
                     metadata={"source": url, "sections": sections}
                 )
                 loaded_docs.append(doc)
                 
-                # Show extracted sections
                 if sections.get('news'):
                     with st.expander(f"News/Updates found from {url}"):
                         for i, news_item in enumerate(sections['news'][:3]):
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
-                # Show extracted document links
                 if sections.get('document_links'):
                     with st.expander(f"Document Links found from {url}"):
                         st.write(f"**Total documents found:** {len(sections['document_links'])}")
                         
-                        # Group by type
                         pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
                         ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
                         
                         if pdf_docs:
-                            st.write("**📄 Direct Document Downloads (PDFs/Files):**")
+                            st.write("**Direct Document Downloads:**")
                             for i, link_info in enumerate(pdf_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         
                         if ref_docs:
-                            st.write("**🔗 Document References/Content Pages:**")
+                            st.write("**Document References:**")
                             for i, link_info in enumerate(ref_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
@@ -445,7 +412,6 @@ def load_hardcoded_websites():
     
     return loaded_docs
 
-# Initialize session state variables
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -460,22 +426,19 @@ st.title("Web GEN-ie")
 
 api_key = "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"
 
-# Auto-load hardcoded websites if not already loaded
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
         st.session_state['loaded_docs'] = load_hardcoded_websites()
         st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
         
-        # Process documents if any were loaded
         if api_key and st.session_state['loaded_docs']:
             with st.spinner("Processing documents..."):
                 llm = ChatGroq(groq_api_key=api_key, model_name='llama3-70b-8192', temperature=0.2, top_p=0.2)
                 hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
                 
-                # Enhanced prompt for IRDAI-specific queries with document links
                 prompt = ChatPromptTemplate.from_template(
                     """
-                    You are an Insurance and Regulatory expert assistant specializing in IRDAI (Insurance Regulatory and Development Authority of India) information.
+                    You are a website expert assistant specializing in understanding and answering questions asked from IRDAI, UIDAI, PMLA and egazette websites.
                     
                     IMPORTANT INSTRUCTIONS:
                     - Only answer questions related to insurance, regulations, acts, policies, and IRDAI matters
@@ -501,7 +464,6 @@ if not st.session_state['docs_loaded']:
                     """
                 )
                 
-                # Text Splitting with smaller chunks for better retrieval
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=1500,
                     chunk_overlap=200,
@@ -511,18 +473,16 @@ if not st.session_state['docs_loaded']:
                 document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
                 st.write(f"Number of chunks created: {len(document_chunks)}")
                 
-                # Vector database storage
                 st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                 
                 # Create chains
                 document_chain = create_stuff_documents_chain(llm, prompt)
-                retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})  # Retrieve more chunks
+                retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                 st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                 
                 st.session_state['docs_loaded'] = True
                 st.success("Documents processed and ready for querying!")
 
-# Query Section
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
@@ -531,38 +491,31 @@ if st.button("Get Answer") and query:
         with st.spinner("Searching and generating answer..."):
             response = st.session_state['retrieval_chain'].invoke({"input": query})
             
-            # Display response first
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Check if query is domain relevant and answer quality is good
             show_additional_info = (
                 is_query_domain_relevant(query, []) and 
                 assess_answer_quality(response['answer'], query)
             )
             
             if show_additional_info:
-                # Get relevant documents
                 retrieved_docs = response.get('context', [])
                 all_document_links = []
                 
                 for doc in retrieved_docs:
-                    # Extract document links from metadata
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
                         for link_info in doc.metadata['sections']['document_links']:
                             if link_info not in all_document_links:
                                 all_document_links.append(link_info)
                 
-                # Filter and rank document links based on query relevance
                 relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
                 
-                # Add relevant documents only if they truly match the answer
                 if relevant_docs:
                     st.write("\n**📄 Related Documents:**")
-                    for i, link_info in enumerate(relevant_docs[:3]):  # Show top 3 most relevant
+                    for i, link_info in enumerate(relevant_docs[:3]):
                         st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
                 
-                # Add source information only for domain-relevant queries
                 st.write("\n**📍 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
@@ -572,7 +525,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                # For irrelevant queries, don't show additional information
                 st.write("\n*Note: For insurance and regulatory queries, additional document links and sources will be provided.*")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
