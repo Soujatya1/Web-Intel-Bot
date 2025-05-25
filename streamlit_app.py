@@ -422,7 +422,6 @@ if 'retrieval_chain' not in st.session_state:
 if 'docs_loaded' not in st.session_state:
     st.session_state['docs_loaded'] = False
 
-# Streamlit UI
 st.title("Web GEN-ie")
 
 api_key = "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"
@@ -476,7 +475,6 @@ if not st.session_state['docs_loaded']:
                 
                 st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                 
-                # Create chains
                 document_chain = create_stuff_documents_chain(llm, prompt)
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                 st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
