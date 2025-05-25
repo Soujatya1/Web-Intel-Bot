@@ -395,7 +395,7 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
@@ -464,28 +464,35 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            show_additional_info = (
-                is_query_domain_relevant(query, []) and 
-                assess_answer_quality(response['answer'], query)
-            )
+            # Simplify this logic too - show additional info based on answer quality only
+            retrieved_docs = response.get('context', [])
             
-            if show_additional_info:
-                retrieved_docs = response.get('context', [])
+            # Check if the response contains substantial regulatory content
+            answer_lower = response['answer'].lower()
+            has_regulatory_content = any(keyword in answer_lower for keyword in [
+                'act', 'regulation', 'circular', 'irdai', 'insurance', 'policy', 
+                'guideline', 'amendment', 'notification'
+            ])
+            
+            # Only show additional info if response contains regulatory content
+            if has_regulatory_content and "outside this domain" not in answer_lower:
+                # Extract and show relevant documents
                 all_document_links = []
-                
                 for doc in retrieved_docs:
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
                         for link_info in doc.metadata['sections']['document_links']:
                             if link_info not in all_document_links:
                                 all_document_links.append(link_info)
                 
+                # You can keep the filter_relevant_documents function but simplify it
                 relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
                 
                 if relevant_docs:
                     st.write("\n**📄 Related Documents:**")
                     for i, link_info in enumerate(relevant_docs[:3]):
-                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
+                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 
+                # Show sources
                 st.write("\n**📍 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
@@ -494,7 +501,5 @@ if st.button("Get Answer") and query:
                 
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
-            else:
-                st.write("\n*Note: For insurance and regulatory queries, additional document links and sources will be provided.*")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
