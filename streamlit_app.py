@@ -15,8 +15,39 @@ from urllib.parse import urljoin, urlparse
 from difflib import SequenceMatcher
 
 HARDCODED_WEBSITES = [
-                      "https://egazette.gov.in/(S(sd0qkpzzyfknsslr0r1bhkhz))/Aboutus.aspx"
-                     ]
+                      "https://irdai.gov.in/acts",
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa",
+                      "https://egazette.gov.in/(S(sd0qkpzzyfknsslr0r1bhkhz))/Default.aspx",
+                     ]
 
 def is_query_domain_relevant(query, domain_keywords):
     query_lower = query.lower()
@@ -80,96 +111,22 @@ def assess_answer_quality(answer, query):
     
     return True
 
-def filter_relevant_documents(document_links, query, ai_response):
-    
-    if not is_query_domain_relevant(query, []):
+def get_relevant_documents(document_links, query, ai_response, max_docs=3):
+    """
+    Simple approach: just return the first few document links from retrieved context
+    """
+    if not document_links:
         return []
     
-    if not assess_answer_quality(ai_response, query):
-        return []
-    
-    response_lower = ai_response.lower()
-    query_lower = query.lower()
-    
-    response_entities = set()
-    
-    meaningful_words = re.findall(r'\b[A-Za-z]{4,}\b', ai_response)
-    for word in meaningful_words:
-        word_lower = word.lower()
-        if word_lower not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 
-                             'would', 'could', 'should', 'these', 'those', 'which', 'where', 
-                             'when', 'what', 'such', 'through', 'under', 'over', 'also', 'information',
-                             'provided', 'context', 'question', 'details', 'scope', 'trained']:
-            response_entities.add(word_lower)
-    
-    act_patterns = re.findall(r'[A-Za-z\s]+act\s*\(?(\d{4})?\)?', ai_response, re.IGNORECASE)
-    year_patterns = re.findall(r'\b(19|20)\d{2}\b', ai_response)
-    
-    response_phrases = set()
-    sentences = re.split(r'[.!?;]', ai_response)
-    for sentence in sentences:
-        words = sentence.strip().split()
-        for i in range(len(words) - 1):
-            if i + 1 < len(words):
-                phrase = f"{words[i]} {words[i+1]}".lower().strip()
-                if len(phrase) > 6 and not any(stop_word in phrase for stop_word in ['the ', 'and ', 'for ', 'are ', 'this ', 'that ', 'information ', 'context ', 'provided ']):
-                    response_phrases.add(phrase)
-    
-    matched_docs = []
-    
+    # Basic filtering - only keep documents with meaningful titles
+    filtered_docs = []
     for doc_link in document_links:
-        title_lower = doc_link['title'].lower()
-        match_score = 0
-        match_reasons = []
-        
-        doc_words = set(re.findall(r'\b[A-Za-z]{4,}\b', title_lower))
-        entity_matches = response_entities.intersection(doc_words)
-        if entity_matches:
-            meaningful_entities = [e for e in entity_matches if e not in ['information', 'context', 'provided', 'question', 'details']]
-            if meaningful_entities:
-                match_score += len(meaningful_entities) * 10
-                match_reasons.append(f"Entity matches: {meaningful_entities}")
-        
-        phrase_matches = []
-        for phrase in response_phrases:
-            if phrase in title_lower and len(phrase) > 8:
-                match_score += 15
-                phrase_matches.append(phrase)
-        
-        if phrase_matches:
-            match_reasons.append(f"Phrase matches: {phrase_matches}")
-        
-        if year_patterns:
-            doc_years = re.findall(r'\b(19|20)\d{2}\b', title_lower)
-            year_matches = set(year_patterns).intersection(set(doc_years))
-            if year_matches:
-                match_score += 20
-                match_reasons.append(f"Year matches: {list(year_matches)}")
-        
-        domain_terms_in_response = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
-        domain_terms_in_title = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
-        
-        response_has_domain = any(term in response_lower for term in domain_terms_in_response)
-        title_has_domain = any(term in title_lower for term in domain_terms_in_title)
-        
-        if response_has_domain and title_has_domain:
-            match_score += 8
-            match_reasons.append("Document type match with response")
-        
-        if match_score > 0:
-            similarity = SequenceMatcher(None, title_lower, response_lower).ratio()
-            if similarity > 0.3:
-                match_score += similarity * 10
-                match_reasons.append(f"High semantic similarity: {similarity:.2f}")
-        
-        if match_score >= 35:
-            doc_link['relevance_score'] = match_score
-            doc_link['match_reasons'] = match_reasons
-            matched_docs.append(doc_link)
+        title = doc_link.get('title', '').strip()
+        if len(title) > 10 and title.lower() not in ['click here', 'read more', 'download']:
+            filtered_docs.append(doc_link)
     
-    matched_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
-    
-    return matched_docs
+    # Just return the first few - they're already from relevant retrieved documents
+    return filtered_docs[:max_docs]
 
 def enhanced_web_scrape(url):
     try:
@@ -485,7 +442,7 @@ if st.button("Get Answer") and query:
                                 all_document_links.append(link_info)
                 
                 # You can keep the filter_relevant_documents function but simplify it
-                relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+                relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
                 
                 if relevant_docs:
                     st.write("\n**📄 Related Documents:**")
