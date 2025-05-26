@@ -13,8 +13,38 @@ import time
 import re
 from urllib.parse import urljoin, urlparse
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
-                      
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa",
+                      "https://egazette.gov.in/(S(sd0qkpzzyfknsslr0r1bhkhz))/Default.aspx"
                      ]
 
 def get_relevant_documents(document_links, query, ai_response, max_docs=3):
