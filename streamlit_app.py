@@ -48,20 +48,16 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                      ]
 
 def get_relevant_documents(document_links, query, ai_response, max_docs=3):
-    """
-    Simple approach: just return the first few document links from retrieved context
-    """
+    
     if not document_links:
         return []
     
-    # Basic filtering - only keep documents with meaningful titles
     filtered_docs = []
     for doc_link in document_links:
         title = doc_link.get('title', '').strip()
         if len(title) > 10 and title.lower() not in ['click here', 'read more', 'download']:
             filtered_docs.append(doc_link)
     
-    # Just return the first few - they're already from relevant retrieved documents
     return filtered_docs[:max_docs]
 
 def enhanced_web_scrape(url):
@@ -278,9 +274,7 @@ def load_hardcoded_websites():
     return loaded_docs
 
 def is_fallback_response(response_text):
-    """
-    Check if the response is the fallback message indicating no relevant context was found
-    """
+
     fallback_phrases = [
         "fall outside the scope of the data I've been trained on",
         "details you've asked for fall outside the scope",
@@ -368,12 +362,9 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Check if this is a fallback response (no relevant context found)
             if not is_fallback_response(response['answer']):
-                # Show additional information only for responses with relevant context
                 retrieved_docs = response.get('context', [])
                 
-                # Extract and show relevant documents
                 all_document_links = []
                 for doc in retrieved_docs:
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
@@ -388,7 +379,6 @@ if st.button("Get Answer") and query:
                     for i, link_info in enumerate(relevant_docs[:3]):
                         st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 
-                # Show sources
                 st.write("\n**📍 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
@@ -398,7 +388,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                # For fallback responses, optionally show a message or just skip the sources
                 st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
