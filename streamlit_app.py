@@ -247,6 +247,19 @@ def load_hardcoded_websites():
     
     return loaded_docs
 
+def is_fallback_response(response_text):
+    """
+    Check if the response is the fallback message indicating no relevant context was found
+    """
+    fallback_phrases = [
+        "fall outside the scope of the data I've been trained on",
+        "details you've asked for fall outside the scope",
+        "outside the scope of the data",
+        "However, I've gathered information that closely aligns"
+    ]
+    
+    return any(phrase in response_text for phrase in fallback_phrases)
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -275,8 +288,8 @@ if not st.session_state['docs_loaded']:
                     You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
                     
                     IMPORTANT INSTRUCTIONS:
-                    - ONLY answer questions that can be addressed using the provided context from the provided websites
-                    - If a question is completely outside the insurance/regulatory domain or if the information is not available in the provided context, respond with: "I can only provide information based on the regulatory documents and guidelines available in my dataset. The specific details you've asked about are not available in the current context. Please ask questions related to insurance regulations, acts, circulars, guidelines, or policy updates."
+                    - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
+                    - If a question is completely outside the insurance/regulatory domain or if the information is not available in the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                     - Pay special attention to dates, recent updates, and chronological information
                     - When asked about "what's new" or recent developments, focus on the most recent information available
                     - Look for press releases, circulars, guidelines, and policy updates
@@ -325,32 +338,37 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Show additional information for all responses
-            retrieved_docs = response.get('context', [])
-            
-            # Extract and show relevant documents
-            all_document_links = []
-            for doc in retrieved_docs:
-                if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                    for link_info in doc.metadata['sections']['document_links']:
-                        if link_info not in all_document_links:
-                            all_document_links.append(link_info)
-            
-            relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
-            
-            if relevant_docs:
-                st.write("\n**📄 Related Documents:**")
-                for i, link_info in enumerate(relevant_docs[:3]):
-                    st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-            
-            # Show sources
-            st.write("\n**📍 Information Sources:**")
-            sources = set()
-            for doc in retrieved_docs:
-                source = doc.metadata.get('source', 'Unknown')
-                sources.add(source)
-            
-            for i, source in enumerate(sources, 1):
-                st.write(f"{i}. [{source}]({source})")
+            # Check if this is a fallback response (no relevant context found)
+            if not is_fallback_response(response['answer']):
+                # Show additional information only for responses with relevant context
+                retrieved_docs = response.get('context', [])
+                
+                # Extract and show relevant documents
+                all_document_links = []
+                for doc in retrieved_docs:
+                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
+                        for link_info in doc.metadata['sections']['document_links']:
+                            if link_info not in all_document_links:
+                                all_document_links.append(link_info)
+                
+                relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+                
+                if relevant_docs:
+                    st.write("\n**📄 Related Documents:**")
+                    for i, link_info in enumerate(relevant_docs[:3]):
+                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                
+                # Show sources
+                st.write("\n**📍 Information Sources:**")
+                sources = set()
+                for doc in retrieved_docs:
+                    source = doc.metadata.get('source', 'Unknown')
+                    sources.add(source)
+                
+                for i, source in enumerate(sources, 1):
+                    st.write(f"{i}. [{source}]({source})")
+            else:
+                # For fallback responses, optionally show a message or just skip the sources
+                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
