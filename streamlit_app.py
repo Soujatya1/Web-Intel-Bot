@@ -12,104 +12,10 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
-from difflib import SequenceMatcher
 
-HARDCODED_WEBSITES = [
-                      "https://irdai.gov.in/acts",
-                      "https://irdai.gov.in/rules",
-                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-                      "https://irdai.gov.in/notifications",
-                      "https://irdai.gov.in/circulars",
-                      "https://irdai.gov.in/orders1",
-                      "https://irdai.gov.in/exposure-drafts",
-                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-                      "https://irdai.gov.in/cic-orders",
-                      "https://irdai.gov.in/antimoney-laundering",
-                      "https://irdai.gov.in/other-communication",
-                      "https://irdai.gov.in/directory-of-employees",
-                      "https://irdai.gov.in/warnings-and-penalties",
-                      "https://uidai.gov.in/en/",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
-                      "https://enforcementdirectorate.gov.in/pmla",
-                      "https://enforcementdirectorate.gov.in/pmla?page=1",
-                      "https://enforcementdirectorate.gov.in/fema",
-                      "https://enforcementdirectorate.gov.in/fema?page=1",
-                      "https://enforcementdirectorate.gov.in/fema?page=2",
-                      "https://enforcementdirectorate.gov.in/fema?page=3",
-                      "https://enforcementdirectorate.gov.in/bns",
-                      "https://enforcementdirectorate.gov.in/bnss",
-                      "https://enforcementdirectorate.gov.in/bsa",
-                      "https://egazette.gov.in/(S(sd0qkpzzyfknsslr0r1bhkhz))/Default.aspx",
-                     ]
-
-def is_query_domain_relevant(query, domain_keywords):
-    query_lower = query.lower()
-    
-    insurance_keywords = [
-        'insurance', 'irdai', 'policy', 'premium', 'claim', 'regulation', 'act', 
-        'circular', 'guideline', 'amendment', 'notification', 'regulatory', 
-        'coverage', 'underwriting', 'reinsurance', 'broker', 'agent', 'policyholder',
-        'solvency', 'capital', 'reserve', 'compliance', 'audit', 'financial',
-        'motor insurance', 'health insurance', 'life insurance', 'general insurance',
-        'micro insurance', 'crop insurance', 'marine insurance', 'fire insurance'
-    ]
-    
-    domain_match_count = sum(1 for keyword in insurance_keywords if keyword in query_lower)
-    
-    if domain_match_count == 0:
-        generic_patterns = [
-            r'\bwho is\b', r'\bwhat is.*(?:actor|movie|film|celebrity|person)\b',
-            r'\btell me about.*(?:person|people|celebrity|actor|actress)\b',
-            r'\b(?:biography|bio|personal life|career|films|movies)\b'
-        ]
-        
-        for pattern in generic_patterns:
-            if re.search(pattern, query_lower):
-                return False
-        
-        person_indicators = ['who is', 'biography', 'born in', 'age of', 'actor', 'actress', 'celebrity']
-        if any(indicator in query_lower for indicator in person_indicators):
-            return False
-    
-    return domain_match_count > 0
-
-def assess_answer_quality(answer, query):
-    answer_lower = answer.lower()
-    query_lower = query.lower()
-    
-    fallback_indicators = [
-        "fall outside the scope",
-        "not found in the provided context",
-        "no specific information",
-        "context provided does not contain",
-        "information is not available"
-    ]
-    
-    has_fallback = any(indicator in answer_lower for indicator in fallback_indicators)
-    
-    domain_keywords = [
-        'insurance', 'irdai', 'act', 'regulation', 'policy', 'circular',
-        'guideline', 'amendment', 'compliance', 'regulatory'
-    ]
-    
-    domain_content_count = sum(1 for keyword in domain_keywords if keyword in answer_lower)
-    
-    if has_fallback and domain_content_count < 2:
-        return False
-    
-    person_query_indicators = ['who is', 'biography', 'tell me about']
-    if any(indicator in query_lower for indicator in person_query_indicators):
-        if domain_content_count > 0:
-            return False
-    
-    return True
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
+                      
+                     ]
 
 def get_relevant_documents(document_links, query, ai_response, max_docs=3):
     """
@@ -366,11 +272,11 @@ if not st.session_state['docs_loaded']:
                 
                 prompt = ChatPromptTemplate.from_template(
                     """
-                    You are a website expert assistant specializing in understanding and answering questions asked from IRDAI, UIDAI, PMLA and egazette websites.
+                    You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
                     
                     IMPORTANT INSTRUCTIONS:
                     - ONLY answer questions that can be addressed using the provided context from the provided websites
-                    - If a question is completely outside the insurance/regulatory domain (like asking about celebrities, movies, general knowledge), respond with: "Thank you for your question about insurance/regulatory matters. While the specific details you've asked for aren't available in my current dataset, I can provide related information that might be helpful based on the available regulatory documents and guidelines."
+                    - If a question is completely outside the insurance/regulatory domain or if the information is not available in the provided context, respond with: "I can only provide information based on the regulatory documents and guidelines available in my dataset. The specific details you've asked about are not available in the current context. Please ask questions related to insurance regulations, acts, circulars, guidelines, or policy updates."
                     - Pay special attention to dates, recent updates, and chronological information
                     - When asked about "what's new" or recent developments, focus on the most recent information available
                     - Look for press releases, circulars, guidelines, and policy updates
@@ -379,8 +285,6 @@ if not st.session_state['docs_loaded']:
                     - When mentioning any acts, circulars, or regulations, try to reference the available document links
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
-
-                    
                     
                     <context>
                     {context}
@@ -421,42 +325,32 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            # Simplify this logic too - show additional info based on answer quality only
+            # Show additional information for all responses
             retrieved_docs = response.get('context', [])
             
-            # Check if the response contains substantial regulatory content
-            answer_lower = response['answer'].lower()
-            has_regulatory_content = any(keyword in answer_lower for keyword in [
-                'act', 'regulation', 'circular', 'irdai', 'insurance', 'policy', 
-                'guideline', 'amendment', 'notification'
-            ])
+            # Extract and show relevant documents
+            all_document_links = []
+            for doc in retrieved_docs:
+                if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
+                    for link_info in doc.metadata['sections']['document_links']:
+                        if link_info not in all_document_links:
+                            all_document_links.append(link_info)
             
-            # Only show additional info if response contains regulatory content
-            if has_regulatory_content and "outside this domain" not in answer_lower:
-                # Extract and show relevant documents
-                all_document_links = []
-                for doc in retrieved_docs:
-                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                        for link_info in doc.metadata['sections']['document_links']:
-                            if link_info not in all_document_links:
-                                all_document_links.append(link_info)
-                
-                # You can keep the filter_relevant_documents function but simplify it
-                relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
-                
-                if relevant_docs:
-                    st.write("\n**📄 Related Documents:**")
-                    for i, link_info in enumerate(relevant_docs[:3]):
-                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                
-                # Show sources
-                st.write("\n**📍 Information Sources:**")
-                sources = set()
-                for doc in retrieved_docs:
-                    source = doc.metadata.get('source', 'Unknown')
-                    sources.add(source)
-                
-                for i, source in enumerate(sources, 1):
-                    st.write(f"{i}. [{source}]({source})")
+            relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+            
+            if relevant_docs:
+                st.write("\n**📄 Related Documents:**")
+                for i, link_info in enumerate(relevant_docs[:3]):
+                    st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+            
+            # Show sources
+            st.write("\n**📍 Information Sources:**")
+            sources = set()
+            for doc in retrieved_docs:
+                source = doc.metadata.get('source', 'Unknown')
+                sources.add(source)
+            
+            for i, source in enumerate(sources, 1):
+                st.write(f"{i}. [{source}]({source})")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
