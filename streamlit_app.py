@@ -461,10 +461,7 @@ if st.button("Get Answer") and query:
                         st.write("**Direct Document Downloads:**")
                         for i, link_info in enumerate(doc_files, 1):
                             st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
-                            # Show a snippet of the context where this document was found
-                            with st.expander(f"Context for Document {i}"):
-                                st.write(f"**Source:** {link_info['source_url']}")
-                                st.write(f"**Context:** {link_info['source_chunk']}")
+                            
                     
                     if ref_files:
                         st.write("**Related References:**")
