@@ -462,7 +462,7 @@ if st.button("Get Answer") and query:
                 
                 # Get relevant documents using enhanced function
                 relevant_docs = get_relevant_documents_enhanced(
-                    unique_document_links, query, response['answer'], max_docs=6
+                    unique_document_links, query, response['answer'], max_docs=1
                 ) if unique_document_links else []
                 
                 if relevant_docs:
