@@ -19,11 +19,8 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
                      ]
 
 def extract_keywords_from_answer(ai_response):
-    """Extract relevant keywords from the AI response to match with document links"""
-    # Convert to lowercase for better matching
     response_lower = ai_response.lower()
     
-    # Common regulatory keywords that might appear in both response and document titles
     regulatory_keywords = [
         'insurance', 'irdai', 'circular', 'guideline', 'regulation', 'amendment',
         'act', 'rule', 'notification', 'policy', 'master', 'direction', 'framework',
@@ -33,10 +30,8 @@ def extract_keywords_from_answer(ai_response):
         'life', 'general', 'pension', 'annuity', 'unit', 'linked', 'ulip'
     ]
     
-    # Extract years mentioned in response (for matching dated documents)
     years = re.findall(r'\b(20\d{2})\b', ai_response)
     
-    # Extract numbers that might be circular/notification numbers
     numbers = re.findall(r'\b(\d{1,4})\b', ai_response)
     
     found_keywords = []
@@ -51,37 +46,30 @@ def extract_keywords_from_answer(ai_response):
     }
 
 def calculate_relevance_score(link_info, extracted_info, query):
-    """Calculate relevance score for a document link based on AI response and query"""
     score = 0
     title_lower = link_info['title'].lower()
     query_lower = query.lower()
     
-    # Higher score for direct document links (PDFs, DOCs)
     if link_info['type'] == 'document':
         score += 10
     
-    # Match keywords from AI response
     for keyword in extracted_info['keywords']:
         if keyword in title_lower:
             score += 5
     
-    # Match years mentioned in response
     for year in extracted_info['years']:
         if year in link_info['title']:
             score += 8
     
-    # Match numbers (circular numbers, etc.)
     for number in extracted_info['numbers']:
         if number in link_info['title']:
             score += 3
     
-    # Match query terms
     query_words = query_lower.split()
     for word in query_words:
         if len(word) > 3 and word in title_lower:
             score += 4
     
-    # Boost score for common important document patterns
     important_patterns = [
         r'master.*direction', r'insurance.*act', r'irdai.*regulation',
         r'circular.*\d+', r'amendment.*act', r'guideline.*\d+'
@@ -93,46 +81,37 @@ def calculate_relevance_score(link_info, extracted_info, query):
     
     return score
 
-def get_relevant_documents_enhanced(document_links, query, ai_response, max_docs=5):
-    """Enhanced function to get relevant documents based on AI response analysis"""
+def get_relevant_documents_enhanced(document_links, query, ai_response, max_docs=1):
     
     if not document_links:
         return []
     
-    # Extract information from AI response
     extracted_info = extract_keywords_from_answer(ai_response)
     
-    # Calculate relevance scores for all documents
     scored_docs = []
     for doc_link in document_links:
         title = doc_link.get('title', '').strip()
         
-        # Filter out generic/unhelpful links
         if (len(title) < 10 or 
             title.lower() in ['click here', 'read more', 'download', 'view', 'see more']):
             continue
         
         score = calculate_relevance_score(doc_link, extracted_info, query)
         
-        if score > 0:  # Only include documents with some relevance
+        if score > 0:
             scored_docs.append((doc_link, score))
     
-    # Sort by relevance score (highest first)
     scored_docs.sort(key=lambda x: x[1], reverse=True)
     
-    # Group by type for better display
     categorized_docs = defaultdict(list)
     for doc_link, score in scored_docs:
         categorized_docs[doc_link['type']].append((doc_link, score))
     
-    # Select top documents, prioritizing different types
     selected_docs = []
     
-    # First, add top document files (PDFs, DOCs)
     for doc_link, score in categorized_docs.get('document', [])[:3]:
         selected_docs.append(doc_link)
     
-    # Then add top references/content links
     remaining_slots = max_docs - len(selected_docs)
     for doc_link, score in (categorized_docs.get('reference', []) + 
                            categorized_docs.get('content', []))[:remaining_slots]:
@@ -445,13 +424,11 @@ if st.button("Get Answer") and query:
             if not is_fallback_response(response['answer']):
                 retrieved_docs = response.get('context', [])
                 
-                # Collect all document links from retrieved documents
                 all_document_links = []
                 for doc in retrieved_docs:
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
                         all_document_links.extend(doc.metadata['sections']['document_links'])
                 
-                # Remove duplicates while preserving order
                 seen_links = set()
                 unique_document_links = []
                 for link_info in all_document_links:
@@ -460,17 +437,15 @@ if st.button("Get Answer") and query:
                         seen_links.add(link_key)
                         unique_document_links.append(link_info)
                 
-                # Get relevant documents using enhanced function
                 relevant_docs = get_relevant_documents_enhanced(
                     unique_document_links, query, response['answer'], max_docs=1
                 ) if unique_document_links else []
                 
                 if relevant_docs:
-                    # Only show direct document downloads (PDFs, DOCs, etc.)
                     doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
                     
                     if doc_files:
-                        st.write("\n**📄 Related Documents:**")
+                        st.write("\n**Related Documents:**")
                         for i, link_info in enumerate(doc_files, 1):
                             st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                     else:
@@ -478,8 +453,7 @@ if st.button("Get Answer") and query:
                 else:
                     st.info("No highly relevant documents found for this specific query.")
                 
-                # Show sources as before
-                st.write("\n**📍 Information Sources:**")
+                st.write("\n**Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
                     source = doc.metadata.get('source', 'Unknown')
@@ -488,6 +462,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+                st.info("ℹNo specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
