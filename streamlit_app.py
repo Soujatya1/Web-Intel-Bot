@@ -109,7 +109,7 @@ def get_relevant_documents_enhanced(document_links, query, ai_response, max_docs
     
     selected_docs = []
     
-    for doc_link, score in categorized_docs.get('document', [])[:3]:
+    for doc_link, score in categorized_docs.get('document', [])[:1]:
         selected_docs.append(doc_link)
     
     remaining_slots = max_docs - len(selected_docs)
