@@ -12,163 +12,131 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
-from difflib import SequenceMatcher
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts", "https://irdai.gov.in/rules"
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
                      ]
 
-def is_query_domain_relevant(query, domain_keywords):
-    query_lower = query.lower()
-    
-    insurance_keywords = [
-        'insurance', 'irdai', 'policy', 'premium', 'claim', 'regulation', 'act', 
-        'circular', 'guideline', 'amendment', 'notification', 'regulatory', 
-        'coverage', 'underwriting', 'reinsurance', 'broker', 'agent', 'policyholder',
-        'solvency', 'capital', 'reserve', 'compliance', 'audit', 'financial',
-        'motor insurance', 'health insurance', 'life insurance', 'general insurance',
-        'micro insurance', 'crop insurance', 'marine insurance', 'fire insurance'
-    ]
-    
-    domain_match_count = sum(1 for keyword in insurance_keywords if keyword in query_lower)
-    
-    if domain_match_count == 0:
-        generic_patterns = [
-            r'\bwho is\b', r'\bwhat is.*(?:actor|movie|film|celebrity|person)\b',
-            r'\btell me about.*(?:person|people|celebrity|actor|actress)\b',
-            r'\b(?:biography|bio|personal life|career|films|movies)\b'
-        ]
-        
-        for pattern in generic_patterns:
-            if re.search(pattern, query_lower):
-                return False
-        
-        person_indicators = ['who is', 'biography', 'born in', 'age of', 'actor', 'actress', 'celebrity']
-        if any(indicator in query_lower for indicator in person_indicators):
-            return False
-    
-    return domain_match_count > 0
-
-def assess_answer_quality(answer, query):
-    answer_lower = answer.lower()
-    query_lower = query.lower()
-    
-    fallback_indicators = [
-        "fall outside the scope",
-        "not found in the provided context",
-        "no specific information",
-        "context provided does not contain",
-        "information is not available"
-    ]
-    
-    has_fallback = any(indicator in answer_lower for indicator in fallback_indicators)
-    
-    domain_keywords = [
-        'insurance', 'irdai', 'act', 'regulation', 'policy', 'circular',
-        'guideline', 'amendment', 'compliance', 'regulatory'
-    ]
-    
-    domain_content_count = sum(1 for keyword in domain_keywords if keyword in answer_lower)
-    
-    if has_fallback and domain_content_count < 2:
-        return False
-    
-    person_query_indicators = ['who is', 'biography', 'tell me about']
-    if any(indicator in query_lower for indicator in person_query_indicators):
-        if domain_content_count > 0:
-            return False
-    
-    return True
-
-def filter_relevant_documents(document_links, query, ai_response):
-    
-    if not is_query_domain_relevant(query, []):
-        return []
-    
-    if not assess_answer_quality(ai_response, query):
-        return []
-    
+def extract_keywords_from_answer(ai_response):
+    """Extract relevant keywords from the AI response to match with document links"""
+    # Convert to lowercase for better matching
     response_lower = ai_response.lower()
+    
+    # Common regulatory keywords that might appear in both response and document titles
+    regulatory_keywords = [
+        'insurance', 'irdai', 'circular', 'guideline', 'regulation', 'amendment',
+        'act', 'rule', 'notification', 'policy', 'master', 'direction', 'framework',
+        'solvency', 'capital', 'investment', 'corporate', 'governance', 'intermediary',
+        'broker', 'agent', 'survey', 'loss', 'claim', 'premium', 'underwriting',
+        'reinsurance', 'microinsurance', 'health', 'motor', 'fire', 'marine',
+        'life', 'general', 'pension', 'annuity', 'unit', 'linked', 'ulip'
+    ]
+    
+    # Extract years mentioned in response (for matching dated documents)
+    years = re.findall(r'\b(20\d{2})\b', ai_response)
+    
+    # Extract numbers that might be circular/notification numbers
+    numbers = re.findall(r'\b(\d{1,4})\b', ai_response)
+    
+    found_keywords = []
+    for keyword in regulatory_keywords:
+        if keyword in response_lower:
+            found_keywords.append(keyword)
+    
+    return {
+        'keywords': found_keywords,
+        'years': years,
+        'numbers': numbers
+    }
+
+def calculate_relevance_score(link_info, extracted_info, query):
+    """Calculate relevance score for a document link based on AI response and query"""
+    score = 0
+    title_lower = link_info['title'].lower()
     query_lower = query.lower()
     
-    response_entities = set()
+    # Higher score for direct document links (PDFs, DOCs)
+    if link_info['type'] == 'document':
+        score += 10
     
-    meaningful_words = re.findall(r'\b[A-Za-z]{4,}\b', ai_response)
-    for word in meaningful_words:
-        word_lower = word.lower()
-        if word_lower not in ['this', 'that', 'with', 'from', 'they', 'have', 'been', 'will', 
-                             'would', 'could', 'should', 'these', 'those', 'which', 'where', 
-                             'when', 'what', 'such', 'through', 'under', 'over', 'also', 'information',
-                             'provided', 'context', 'question', 'details', 'scope', 'trained']:
-            response_entities.add(word_lower)
+    # Match keywords from AI response
+    for keyword in extracted_info['keywords']:
+        if keyword in title_lower:
+            score += 5
     
-    act_patterns = re.findall(r'[A-Za-z\s]+act\s*\(?(\d{4})?\)?', ai_response, re.IGNORECASE)
-    year_patterns = re.findall(r'\b(19|20)\d{2}\b', ai_response)
+    # Match years mentioned in response
+    for year in extracted_info['years']:
+        if year in link_info['title']:
+            score += 8
     
-    response_phrases = set()
-    sentences = re.split(r'[.!?;]', ai_response)
-    for sentence in sentences:
-        words = sentence.strip().split()
-        for i in range(len(words) - 1):
-            if i + 1 < len(words):
-                phrase = f"{words[i]} {words[i+1]}".lower().strip()
-                if len(phrase) > 6 and not any(stop_word in phrase for stop_word in ['the ', 'and ', 'for ', 'are ', 'this ', 'that ', 'information ', 'context ', 'provided ']):
-                    response_phrases.add(phrase)
+    # Match numbers (circular numbers, etc.)
+    for number in extracted_info['numbers']:
+        if number in link_info['title']:
+            score += 3
     
-    matched_docs = []
+    # Match query terms
+    query_words = query_lower.split()
+    for word in query_words:
+        if len(word) > 3 and word in title_lower:
+            score += 4
     
+    # Boost score for common important document patterns
+    important_patterns = [
+        r'master.*direction', r'insurance.*act', r'irdai.*regulation',
+        r'circular.*\d+', r'amendment.*act', r'guideline.*\d+'
+    ]
+    
+    for pattern in important_patterns:
+        if re.search(pattern, title_lower):
+            score += 6
+    
+    return score
+
+def get_relevant_documents_enhanced(document_links, query, ai_response, max_docs=5):
+    """Enhanced function to get relevant documents based on AI response analysis"""
+    
+    if not document_links:
+        return []
+    
+    # Extract information from AI response
+    extracted_info = extract_keywords_from_answer(ai_response)
+    
+    # Calculate relevance scores for all documents
+    scored_docs = []
     for doc_link in document_links:
-        title_lower = doc_link['title'].lower()
-        match_score = 0
-        match_reasons = []
+        title = doc_link.get('title', '').strip()
         
-        doc_words = set(re.findall(r'\b[A-Za-z]{4,}\b', title_lower))
-        entity_matches = response_entities.intersection(doc_words)
-        if entity_matches:
-            meaningful_entities = [e for e in entity_matches if e not in ['information', 'context', 'provided', 'question', 'details']]
-            if meaningful_entities:
-                match_score += len(meaningful_entities) * 10
-                match_reasons.append(f"Entity matches: {meaningful_entities}")
+        # Filter out generic/unhelpful links
+        if (len(title) < 10 or 
+            title.lower() in ['click here', 'read more', 'download', 'view', 'see more']):
+            continue
         
-        phrase_matches = []
-        for phrase in response_phrases:
-            if phrase in title_lower and len(phrase) > 8:
-                match_score += 15
-                phrase_matches.append(phrase)
+        score = calculate_relevance_score(doc_link, extracted_info, query)
         
-        if phrase_matches:
-            match_reasons.append(f"Phrase matches: {phrase_matches}")
-        
-        if year_patterns:
-            doc_years = re.findall(r'\b(19|20)\d{2}\b', title_lower)
-            year_matches = set(year_patterns).intersection(set(doc_years))
-            if year_matches:
-                match_score += 20
-                match_reasons.append(f"Year matches: {list(year_matches)}")
-        
-        domain_terms_in_response = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
-        domain_terms_in_title = ['act', 'regulation', 'circular', 'amendment', 'guideline', 'insurance']
-        
-        response_has_domain = any(term in response_lower for term in domain_terms_in_response)
-        title_has_domain = any(term in title_lower for term in domain_terms_in_title)
-        
-        if response_has_domain and title_has_domain:
-            match_score += 8
-            match_reasons.append("Document type match with response")
-        
-        if match_score > 0:
-            similarity = SequenceMatcher(None, title_lower, response_lower).ratio()
-            if similarity > 0.3:
-                match_score += similarity * 10
-                match_reasons.append(f"High semantic similarity: {similarity:.2f}")
-        
-        if match_score >= 35:
-            doc_link['relevance_score'] = match_score
-            doc_link['match_reasons'] = match_reasons
-            matched_docs.append(doc_link)
+        if score > 0:  # Only include documents with some relevance
+            scored_docs.append((doc_link, score))
     
-    matched_docs.sort(key=lambda x: x['relevance_score'], reverse=True)
+    # Sort by relevance score (highest first)
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
     
-    return matched_docs
+    # Group by type for better display
+    categorized_docs = defaultdict(list)
+    for doc_link, score in scored_docs:
+        categorized_docs[doc_link['type']].append((doc_link, score))
+    
+    # Select top documents, prioritizing different types
+    selected_docs = []
+    
+    # First, add top document files (PDFs, DOCs)
+    for doc_link, score in categorized_docs.get('document', [])[:3]:
+        selected_docs.append(doc_link)
+    
+    # Then add top references/content links
+    remaining_slots = max_docs - len(selected_docs)
+    for doc_link, score in (categorized_docs.get('reference', []) + 
+                           categorized_docs.get('content', []))[:remaining_slots]:
+        selected_docs.append(doc_link)
+    
+    return selected_docs
 
 def enhanced_web_scrape(url):
     try:
@@ -383,6 +351,17 @@ def load_hardcoded_websites():
     
     return loaded_docs
 
+def is_fallback_response(response_text):
+
+    fallback_phrases = [
+        "fall outside the scope of the data I've been trained on",
+        "details you've asked for fall outside the scope",
+        "outside the scope of the data",
+        "However, I've gathered information that closely aligns"
+    ]
+    
+    return any(phrase in response_text for phrase in fallback_phrases)
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -392,7 +371,6 @@ if 'retrieval_chain' not in st.session_state:
 if 'docs_loaded' not in st.session_state:
     st.session_state['docs_loaded'] = False
 
-# Streamlit UI
 st.title("Web GEN-ie")
 
 api_key = "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"
@@ -409,11 +387,11 @@ if not st.session_state['docs_loaded']:
                 
                 prompt = ChatPromptTemplate.from_template(
                     """
-                    You are a website expert assistant specializing in understanding and answering questions asked from IRDAI, UIDAI, PMLA and egazette websites.
+                    You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
                     
                     IMPORTANT INSTRUCTIONS:
-                    - Only answer questions related to insurance, regulations, acts, policies, and IRDAI matters
-                    - If a question is completely outside the insurance/regulatory domain (like asking about celebrities, movies, general knowledge), respond with: "I'm specialized in insurance and regulatory matters. Please ask questions related to insurance policies, IRDAI regulations, acts, circulars, or other insurance-related topics."
+                    - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
+                    - If a question is completely outside the insurance/regulatory domain or if the information is not available in the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                     - Pay special attention to dates, recent updates, and chronological information
                     - When asked about "what's new" or recent developments, focus on the most recent information available
                     - Look for press releases, circulars, guidelines, and policy updates
@@ -422,8 +400,6 @@ if not st.session_state['docs_loaded']:
                     - When mentioning any acts, circulars, or regulations, try to reference the available document links
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
-
-                    If the question is insurance-related but specific details are not found in the context, respond with: "Thank you for your question about insurance/regulatory matters. While the specific details you've asked for aren't available in my current dataset, I can provide related information that might be helpful based on the available regulatory documents and guidelines."
                     
                     <context>
                     {context}
@@ -446,7 +422,6 @@ if not st.session_state['docs_loaded']:
                 
                 st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                 
-                # Create chains
                 document_chain = create_stuff_documents_chain(llm, prompt)
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                 st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
@@ -465,29 +440,50 @@ if st.button("Get Answer") and query:
             st.subheader("Response:")
             st.write(response['answer'])
             
-            show_additional_info = (
-                is_query_domain_relevant(query, []) and 
-                assess_answer_quality(response['answer'], query)
-            )
-            
-            if show_additional_info:
+            if not is_fallback_response(response['answer']):
                 retrieved_docs = response.get('context', [])
-                all_document_links = []
                 
+                # Collect all document links from retrieved documents
+                all_document_links = []
                 for doc in retrieved_docs:
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                        for link_info in doc.metadata['sections']['document_links']:
-                            if link_info not in all_document_links:
-                                all_document_links.append(link_info)
+                        all_document_links.extend(doc.metadata['sections']['document_links'])
                 
-                relevant_docs = filter_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+                # Remove duplicates while preserving order
+                seen_links = set()
+                unique_document_links = []
+                for link_info in all_document_links:
+                    link_key = (link_info['title'], link_info['link'])
+                    if link_key not in seen_links:
+                        seen_links.add(link_key)
+                        unique_document_links.append(link_info)
+                
+                # Get relevant documents using enhanced function
+                relevant_docs = get_relevant_documents_enhanced(
+                    unique_document_links, query, response['answer'], max_docs=6
+                ) if unique_document_links else []
                 
                 if relevant_docs:
-                    st.write("\n**Related Documents:**")
-                    for i, link_info in enumerate(relevant_docs[:3]):
-                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}) (Relevance: {link_info['relevance_score']:.1f})")
+                    st.write("\n**📄 Most Relevant Documents:**")
+                    
+                    # Group by type for better display
+                    doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
+                    ref_links = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
+                    
+                    if doc_files:
+                        st.write("**Direct Downloads:**")
+                        for i, link_info in enumerate(doc_files, 1):
+                            st.write(f"{i}. 📎 [{link_info['title']}]({link_info['link']})")
+                    
+                    if ref_links:
+                        st.write("**Related References:**")
+                        for i, link_info in enumerate(ref_links, 1):
+                            st.write(f"{i}. 🔗 [{link_info['title']}]({link_info['link']})")
+                else:
+                    st.info("No highly relevant documents found for this specific query.")
                 
-                st.write("\n**Information Sources:**")
+                # Show sources as before
+                st.write("\n**📍 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
                     source = doc.metadata.get('source', 'Unknown')
@@ -496,6 +492,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                st.write("\n*Note: For insurance and regulatory queries, additional document links and sources will be provided.*")
+                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
