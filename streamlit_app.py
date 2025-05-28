@@ -395,7 +395,7 @@ if 'docs_loaded' not in st.session_state:
 # Streamlit UI
 st.title("Web GEN-ie")
 
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
