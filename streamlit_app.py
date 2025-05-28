@@ -466,18 +466,15 @@ if st.button("Get Answer") and query:
                 ) if unique_document_links else []
                 
                 if relevant_docs:
-                    st.write("\n**📄 Most Relevant Documents:**")
-                    
-                    # Group by type for better display
+                    # Only show direct document downloads (PDFs, DOCs, etc.)
                     doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
-                    ref_links = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
                     
                     if doc_files:
-                        st.write("**Direct Downloads:**")
+                        st.write("\n**📄 Related Documents:**")
                         for i, link_info in enumerate(doc_files, 1):
-                            st.write(f"{i}. 📎 [{link_info['title']}]({link_info['link']})")
-                    
-                    
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                    else:
+                        st.info("No direct document downloads found for this specific query.")
                 else:
                     st.info("No highly relevant documents found for this specific query.")
                 
