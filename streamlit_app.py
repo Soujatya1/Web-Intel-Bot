@@ -18,106 +18,134 @@ from collections import defaultdict
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
                      ]
 
-def extract_keywords_from_answer(ai_response):
+def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_docs=3):
+    """
+    Extract document links from the same context chunks that were used to generate the answer.
+    This ensures the documents are actually relevant to the specific information in the response.
+    """
+    relevant_document_links = []
+    
+    # Get all document links from the retrieved context chunks
+    for doc in retrieved_docs:
+        doc_metadata = doc.metadata
+        doc_content = doc.page_content
+        
+        # Get document links from this specific chunk
+        if 'sections' in doc_metadata and 'document_links' in doc_metadata['sections']:
+            chunk_doc_links = doc_metadata['sections']['document_links']
+            
+            # For each document link, add context information
+            for link_info in chunk_doc_links:
+                enhanced_link = {
+                    'title': link_info['title'],
+                    'link': link_info['link'],
+                    'type': link_info['type'],
+                    'source_chunk': doc_content[:500] + "..." if len(doc_content) > 500 else doc_content,
+                    'source_url': doc_metadata.get('source', ''),
+                    'relevance_context': doc_content  # Full context for relevance scoring
+                }
+                relevant_document_links.append(enhanced_link)
+    
+    # Remove duplicates based on link URL
+    seen_links = set()
+    unique_links = []
+    for link in relevant_document_links:
+        if link['link'] not in seen_links:
+            seen_links.add(link['link'])
+            unique_links.append(link)
+    
+    # Score links based on their context relevance to the query and response
+    scored_links = []
+    for link in unique_links:
+        score = calculate_context_relevance_score(link, query, ai_response)
+        if score > 0:
+            scored_links.append((link, score))
+    
+    # Sort by relevance score
+    scored_links.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return top documents, prioritizing actual document files
+    result_links = []
+    document_files = [(link, score) for link, score in scored_links if link['type'] == 'document']
+    reference_links = [(link, score) for link, score in scored_links if link['type'] in ['reference', 'content']]
+    
+    # Add document files first
+    for link, score in document_files[:max_docs]:
+        result_links.append(link)
+    
+    # Fill remaining slots with reference links
+    remaining_slots = max_docs - len(result_links)
+    for link, score in reference_links[:remaining_slots]:
+        result_links.append(link)
+    
+    return result_links
+
+def calculate_context_relevance_score(link_info, query, ai_response):
+    """
+    Calculate relevance score based on the actual context where the link was found,
+    rather than just keyword matching.
+    """
+    score = 0
+    
+    # Get the context text where this link was found
+    context_text = link_info['relevance_context'].lower()
+    link_title = link_info['title'].lower()
+    query_lower = query.lower()
     response_lower = ai_response.lower()
     
-    regulatory_keywords = [
-        'insurance', 'irdai', 'circular', 'guideline', 'regulation', 'amendment',
-        'act', 'rule', 'notification', 'policy', 'master', 'direction', 'framework',
-        'solvency', 'capital', 'investment', 'corporate', 'governance', 'intermediary',
-        'broker', 'agent', 'survey', 'loss', 'claim', 'premium', 'underwriting',
-        'reinsurance', 'microinsurance', 'health', 'motor', 'fire', 'marine',
-        'life', 'general', 'pension', 'annuity', 'unit', 'linked', 'ulip'
-    ]
-    
-    years = re.findall(r'\b(20\d{2})\b', ai_response)
-    
-    numbers = re.findall(r'\b(\d{1,4})\b', ai_response)
-    
-    found_keywords = []
-    for keyword in regulatory_keywords:
-        if keyword in response_lower:
-            found_keywords.append(keyword)
-    
-    return {
-        'keywords': found_keywords,
-        'years': years,
-        'numbers': numbers
-    }
-
-def calculate_relevance_score(link_info, extracted_info, query):
-    score = 0
-    title_lower = link_info['title'].lower()
-    query_lower = query.lower()
-    
+    # Higher score for actual document files
     if link_info['type'] == 'document':
-        score += 10
+        score += 15
     
-    for keyword in extracted_info['keywords']:
-        if keyword in title_lower:
-            score += 5
-    
-    for year in extracted_info['years']:
-        if year in link_info['title']:
-            score += 8
-    
-    for number in extracted_info['numbers']:
-        if number in link_info['title']:
-            score += 3
-    
-    query_words = query_lower.split()
+    # Score based on query terms appearing in the same context as the link
+    query_words = [word for word in query_lower.split() if len(word) > 3]
     for word in query_words:
-        if len(word) > 3 and word in title_lower:
-            score += 4
+        if word in context_text:
+            score += 8
+            if word in link_title:
+                score += 5  # Bonus if query word is also in link title
     
-    important_patterns = [
-        r'master.*direction', r'insurance.*act', r'irdai.*regulation',
-        r'circular.*\d+', r'amendment.*act', r'guideline.*\d+'
+    # Score based on response content appearing in the same context
+    response_words = [word for word in response_lower.split() if len(word) > 4]
+    common_words = set(['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'])
+    response_words = [word for word in response_words if word not in common_words]
+    
+    context_response_matches = 0
+    for word in response_words[:20]:  # Limit to avoid over-processing
+        if word in context_text:
+            context_response_matches += 1
+    
+    # Score based on how much of the response content is reflected in this context
+    if len(response_words) > 0:
+        match_ratio = context_response_matches / len(response_words)
+        score += int(match_ratio * 20)  # Up to 20 points for high context overlap
+    
+    # Bonus for regulatory document patterns in the title
+    regulatory_patterns = [
+        r'act.*\d{4}', r'circular.*\d+', r'amendment.*act', r'insurance.*act',
+        r'guideline', r'master.*direction', r'regulation.*\d+', r'notification.*\d+'
     ]
     
-    for pattern in important_patterns:
-        if re.search(pattern, title_lower):
-            score += 6
+    for pattern in regulatory_patterns:
+        if re.search(pattern, link_title):
+            score += 10
+            break
     
-    return score
-
-def get_relevant_documents_enhanced(document_links, query, ai_response, max_docs=1):
+    # Bonus for year matches between query/response and link title
+    years_in_query = re.findall(r'\b(20\d{2})\b', query_lower)
+    years_in_response = re.findall(r'\b(20\d{2})\b', response_lower)
+    years_in_title = re.findall(r'\b(20\d{2})\b', link_title)
     
-    if not document_links:
-        return []
+    for year in set(years_in_query + years_in_response):
+        if year in years_in_title:
+            score += 12
     
-    extracted_info = extract_keywords_from_answer(ai_response)
+    # Penalty for generic or poor quality titles
+    poor_titles = ['click here', 'read more', 'download', 'view', 'see more', 'link']
+    if any(poor_title in link_title for poor_title in poor_titles) or len(link_info['title'].strip()) < 10:
+        score -= 10
     
-    scored_docs = []
-    for doc_link in document_links:
-        title = doc_link.get('title', '').strip()
-        
-        if (len(title) < 10 or 
-            title.lower() in ['click here', 'read more', 'download', 'view', 'see more']):
-            continue
-        
-        score = calculate_relevance_score(doc_link, extracted_info, query)
-        
-        if score > 0:
-            scored_docs.append((doc_link, score))
-    
-    scored_docs.sort(key=lambda x: x[1], reverse=True)
-    
-    categorized_docs = defaultdict(list)
-    for doc_link, score in scored_docs:
-        categorized_docs[doc_link['type']].append((doc_link, score))
-    
-    selected_docs = []
-    
-    for doc_link, score in categorized_docs.get('document', [])[:1]:
-        selected_docs.append(doc_link)
-    
-    remaining_slots = max_docs - len(selected_docs)
-    for doc_link, score in (categorized_docs.get('reference', []) + 
-                           categorized_docs.get('content', []))[:remaining_slots]:
-        selected_docs.append(doc_link)
-    
-    return selected_docs
+    return max(0, score)  # Ensure non-negative score
 
 def enhanced_web_scrape(url):
     try:
@@ -140,16 +168,19 @@ def enhanced_web_scrape(url):
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
-def extract_document_links(html_content, url):
+def extract_document_links_with_context(html_content, url):
+    """
+    Extract document links along with their surrounding context for better relevance matching.
+    """
     soup = BeautifulSoup(html_content, 'html.parser')
     
     for script in soup(["script", "style"]):
         script.decompose()
     
     document_links = []
-    
     document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
     
+    # Find all links and capture their context
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -163,6 +194,15 @@ def extract_document_links(html_content, url):
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
+        # Get surrounding context - parent elements text
+        context_text = ""
+        parent = link.parent
+        if parent:
+            context_text = parent.get_text(strip=True)
+            # If parent context is too short, try grandparent
+            if len(context_text) < 50 and parent.parent:
+                context_text = parent.parent.get_text(strip=True)
+        
         is_document_link = any(ext in href.lower() for ext in document_extensions)
         
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
@@ -173,76 +213,58 @@ def extract_document_links(html_content, url):
             document_links.append({
                 'title': link_text,
                 'link': href,
-                'type': 'document' if is_document_link else 'content'
+                'type': 'document' if is_document_link else 'content',
+                'context': context_text[:300]  # Store surrounding context
             })
     
+    # Extract from tables with context
     tables = soup.find_all('table')
     for table in tables:
+        # Get table context - any heading before the table
+        table_context = ""
+        prev_sibling = table.find_previous_sibling(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
+        if prev_sibling:
+            table_context = prev_sibling.get_text(strip=True)
+        
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            if len(cells) >= 3:
-                for cell in cells:
-                    links_in_cell = cell.find_all('a', href=True)
-                    for link in links_in_cell:
-                        href = link.get('href')
-                        link_text = link.get_text(strip=True)
+            row_text = ' '.join(cell.get_text(strip=True) for cell in cells)
+            
+            for cell in cells:
+                links_in_cell = cell.find_all('a', href=True)
+                for link in links_in_cell:
+                    href = link.get('href')
+                    link_text = link.get_text(strip=True)
+                    
+                    if not href or len(link_text) < 5:
+                        continue
                         
-                        if not href or len(link_text) < 5:
-                            continue
-                            
-                        if href.startswith('/'):
-                            href = urljoin(url, href)
-                        elif not href.startswith(('http://', 'https://')):
-                            href = urljoin(url, href)
-                        
-                        document_patterns = [
-                            r'act.*\d{4}',
-                            r'circular.*\d+',
-                            r'amendment.*act',
-                            r'insurance.*act',
-                            r'guideline',
-                            r'master.*direction',
-                            r'regulation.*\d+'
-                        ]
-                        
-                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        is_document_extension = any(ext in href.lower() for ext in document_extensions)
-                        
-                        if is_likely_document or is_document_extension:
-                            document_links.append({
-                                'title': link_text,
-                                'link': href,
-                                'type': 'document' if is_document_extension else 'reference'
-                            })
-    
-    content_sections = soup.find_all(['div', 'section', 'article'])
-    for section in content_sections:
-        section_text = section.get_text().lower()
-        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
-            links_in_section = section.find_all('a', href=True)
-            for link in links_in_section:
-                href = link.get('href')
-                link_text = link.get_text(strip=True)
-                
-                if not href or len(link_text) < 5:
-                    continue
-                
-                if href.startswith('/'):
-                    href = urljoin(url, href)
-                elif not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
-                
-                if len(link_text) > 10 and len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                                       'amendment', 'notification', 'insurance', 'policy']
-                    if any(keyword in link_text.lower() for keyword in document_keywords):
+                    if href.startswith('/'):
+                        href = urljoin(url, href)
+                    elif not href.startswith(('http://', 'https://')):
+                        href = urljoin(url, href)
+                    
+                    # Combine table context with row context
+                    combined_context = f"{table_context} {row_text}".strip()
+                    
+                    document_patterns = [
+                        r'act.*\d{4}', r'circular.*\d+', r'amendment.*act', r'insurance.*act',
+                        r'guideline', r'master.*direction', r'regulation.*\d+'
+                    ]
+                    
+                    is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
+                    is_document_extension = any(ext in href.lower() for ext in document_extensions)
+                    
+                    if is_likely_document or is_document_extension:
                         document_links.append({
                             'title': link_text,
                             'link': href,
-                            'type': 'reference'
+                            'type': 'document' if is_document_extension else 'reference',
+                            'context': combined_context[:300]
                         })
     
+    # Remove duplicates
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -250,8 +272,6 @@ def extract_document_links(html_content, url):
         if link_key not in seen_links:
             seen_links.add(link_key)
             unique_document_links.append(link_info)
-    
-    unique_document_links.sort(key=lambda x: (x['type'] != 'document', x['title']))
     
     return unique_document_links
 
@@ -263,6 +283,7 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
+    # Extract news sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -274,10 +295,11 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
-    content_sections['document_links'] = extract_document_links(html_content, url)
+    # Extract document links with context
+    content_sections['document_links'] = extract_document_links_with_context(html_content, url)
     
+    # Get main text
     main_text = soup.get_text()
-    
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
@@ -333,7 +355,6 @@ def load_hardcoded_websites():
     return loaded_docs
 
 def is_fallback_response(response_text):
-
     fallback_phrases = [
         "fall outside the scope of the data I've been trained on",
         "details you've asked for fall outside the scope",
@@ -343,6 +364,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -424,36 +446,34 @@ if st.button("Get Answer") and query:
             if not is_fallback_response(response['answer']):
                 retrieved_docs = response.get('context', [])
                 
-                all_document_links = []
-                for doc in retrieved_docs:
-                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                        all_document_links.extend(doc.metadata['sections']['document_links'])
-                
-                seen_links = set()
-                unique_document_links = []
-                for link_info in all_document_links:
-                    link_key = (link_info['title'], link_info['link'])
-                    if link_key not in seen_links:
-                        seen_links.add(link_key)
-                        unique_document_links.append(link_info)
-                
-                relevant_docs = get_relevant_documents_enhanced(
-                    unique_document_links, query, response['answer'], max_docs=1
-                ) if unique_document_links else []
+                # NEW APPROACH: Get documents from the actual context chunks used in the response
+                relevant_docs = get_documents_from_context_chunks(
+                    retrieved_docs, query, response['answer'], max_docs=3
+                )
                 
                 if relevant_docs:
+                    st.write("\n**📄 Related Documents (from answer context):**")
+                    
                     doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
+                    ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
                     
                     if doc_files:
-                        st.write("\n**Related Documents:**")
+                        st.write("**Direct Document Downloads:**")
                         for i, link_info in enumerate(doc_files, 1):
                             st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
-                    else:
-                        st.info("No direct document downloads found for this specific query.")
+                            # Show a snippet of the context where this document was found
+                            with st.expander(f"Context for Document {i}"):
+                                st.write(f"**Source:** {link_info['source_url']}")
+                                st.write(f"**Context:** {link_info['source_chunk']}")
+                    
+                    if ref_files:
+                        st.write("**Related References:**")
+                        for i, link_info in enumerate(ref_files, 1):
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.info("No highly relevant documents found for this specific query.")
+                    st.info("No specific documents found in the context used for this answer.")
                 
-                st.write("\n**Information Sources:**")
+                st.write("\n**🔗 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
                     source = doc.metadata.get('source', 'Unknown')
@@ -462,6 +482,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                st.info("ℹNo specific documents or sources are available for this query as it falls outside the current data scope.")
+                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
