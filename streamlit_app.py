@@ -477,10 +477,7 @@ if st.button("Get Answer") and query:
                         for i, link_info in enumerate(doc_files, 1):
                             st.write(f"{i}. 📎 [{link_info['title']}]({link_info['link']})")
                     
-                    if ref_links:
-                        st.write("**Related References:**")
-                        for i, link_info in enumerate(ref_links, 1):
-                            st.write(f"{i}. 🔗 [{link_info['title']}]({link_info['link']})")
+                    
                 else:
                     st.info("No highly relevant documents found for this specific query.")
                 
