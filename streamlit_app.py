@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
+from collections import defaultdict
+
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
                      ]
