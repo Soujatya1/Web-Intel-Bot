@@ -400,7 +400,7 @@ if not st.session_state['docs_loaded']:
                     - Look for press releases, circulars, guidelines, and policy updates
                     - Provide specific details about new regulations, policy changes, or announcements
                     - If you find dated information, mention the specific dates
-                    - When mentioning any acts, circulars, or regulations, try to reference the available document links
+                    - When mentioning any acts, circulars, or regulations
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                     
@@ -410,7 +410,7 @@ if not st.session_state['docs_loaded']:
                     
                     Question: {input}
                     
-                    Answer with specific details, dates, and references where available. If relevant documents are mentioned, note that direct links may be available in the sources section.
+                    Answer with specific details, dates. If relevant documents are mentioned, note that direct links may be available in the sources section.
                     """
                 )
                 
