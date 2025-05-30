@@ -65,6 +65,12 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
     
     return result_links
 
+def is_direct_download_link(url):
+    """Check if a URL is a direct download link (PDF, DOC, etc.)"""
+    download_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar']
+    url_lower = url.lower()
+    return any(ext in url_lower for ext in download_extensions)
+
 def calculate_context_relevance_score(link_info, query, ai_response):
     
     score = 0
@@ -74,7 +80,8 @@ def calculate_context_relevance_score(link_info, query, ai_response):
     query_lower = query.lower()
     response_lower = ai_response.lower()
     
-    if link_info['type'] == 'document':
+    # Boost score for web pages/redirectable content
+    if link_info['type'] in ['content', 'reference']:
         score += 15
     
     query_words = [word for word in query_lower.split() if len(word) > 3]
@@ -178,11 +185,12 @@ def extract_document_links_with_context(html_content, url):
                            'notification', 'order', 'policy', 'master', 'framework', 'directive']
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
-        if is_document_link or has_doc_keywords:
+        # Only include non-download links
+        if (has_doc_keywords or is_document_link) and not is_direct_download_link(href):
             document_links.append({
                 'title': link_text,
                 'link': href,
-                'type': 'document' if is_document_link else 'content',
+                'type': 'content',  # Mark all as content since we're filtering out direct downloads
                 'context': context_text[:300]
             })
     
@@ -212,6 +220,10 @@ def extract_document_links_with_context(html_content, url):
                     elif not href.startswith(('http://', 'https://')):
                         href = urljoin(url, href)
                     
+                    # Skip direct download links
+                    if is_direct_download_link(href):
+                        continue
+                    
                     combined_context = f"{table_context} {row_text}".strip()
                     
                     document_patterns = [
@@ -220,13 +232,12 @@ def extract_document_links_with_context(html_content, url):
                     ]
                     
                     is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                    is_document_extension = any(ext in href.lower() for ext in document_extensions)
                     
-                    if is_likely_document or is_document_extension:
+                    if is_likely_document:
                         document_links.append({
                             'title': link_text,
                             'link': href,
-                            'type': 'document' if is_document_extension else 'reference',
+                            'type': 'reference',
                             'context': combined_context[:300]
                         })
     
@@ -291,23 +302,23 @@ def load_hardcoded_websites():
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
                 if sections.get('document_links'):
-                    with st.expander(f"Document Links found from {url}"):
-                        st.write(f"**Total documents found:** {len(sections['document_links'])}")
+                    with st.expander(f"Redirectable Links found from {url}"):
+                        st.write(f"**Total redirectable links found:** {len(sections['document_links'])}")
                         
-                        pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
-                        ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
+                        content_links = [link for link in sections['document_links'] if link['type'] == 'content']
+                        ref_links = [link for link in sections['document_links'] if link['type'] == 'reference']
                         
-                        if pdf_docs:
-                            st.write("**Direct Document Downloads:**")
-                            for i, link_info in enumerate(pdf_docs[:10]):
+                        if content_links:
+                            st.write("**Content Pages:**")
+                            for i, link_info in enumerate(content_links[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         
-                        if ref_docs:
-                            st.write("**Document References:**")
-                            for i, link_info in enumerate(ref_docs[:10]):
+                        if ref_links:
+                            st.write("**Reference Pages:**")
+                            for i, link_info in enumerate(ref_links[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.write(f"No document links found from {url}")
+                    st.write(f"No redirectable links found from {url}")
             
             st.success(f"Successfully loaded content from {url}")
             
@@ -371,7 +382,7 @@ if not st.session_state['docs_loaded']:
                     
                     Question: {input}
                     
-                    Answer with specific details, dates. If relevant documents are mentioned, note that direct links may be available in the sources section.
+                    Answer with specific details, dates. If relevant documents are mentioned, note that related web pages may be available in the sources section.
                     """
                 )
                 
@@ -412,23 +423,12 @@ if st.button("Get Answer") and query:
                 )
                 
                 if relevant_docs:
-                    st.write("\n**Related Documents (from answer context):**")
+                    st.write("\n**Related Web Pages (from answer context):**")
                     
-                    doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
-                    ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
-                    
-                    if doc_files:
-                        st.write("**Direct Document Downloads:**")
-                        for i, link_info in enumerate(doc_files, 1):
-                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
-                            
-                    
-                    if ref_files:
-                        st.write("**Related References:**")
-                        for i, link_info in enumerate(ref_files, 1):
-                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                    for i, link_info in enumerate(relevant_docs, 1):
+                        st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.info("No specific documents found in the context used for this answer.")
+                    st.info("No specific web pages found in the context used for this answer.")
                 
                 st.write("\n**Information Sources:**")
                 sources = set()
