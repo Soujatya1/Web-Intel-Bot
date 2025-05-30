@@ -15,8 +15,7 @@ from urllib.parse import urljoin, urlparse
 from collections import defaultdict
 
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                     "https://uidai.gov.in/en/my-aadhaar/downloads/acts-and-rules.html"
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
                      ]
 
 def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_docs=3):
@@ -37,9 +36,7 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
                     'type': link_info['type'],
                     'source_chunk': doc_content[:500] + "..." if len(doc_content) > 500 else doc_content,
                     'source_url': doc_metadata.get('source', ''),
-                    'relevance_context': doc_content,
-                    'column_info': link_info.get('column_info', {}),  # New field to store column context
-                    'priority': link_info.get('priority', 0)  # New field for link priority
+                    'relevance_context': doc_content
                 }
                 relevant_document_links.append(enhanced_link)
     
@@ -56,22 +53,17 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
         if score > 0:
             scored_links.append((link, score))
     
-    # Sort by priority first, then by score
-    scored_links.sort(key=lambda x: (x[0]['priority'], x[1]), reverse=True)
+    scored_links.sort(key=lambda x: x[1], reverse=True)
     
     result_links = []
-    
-    # Prioritize content links (from subtitle/content columns) over document downloads
-    content_links = [(link, score) for link, score in scored_links if link['type'] in ['content', 'reference']]
     document_files = [(link, score) for link, score in scored_links if link['type'] == 'document']
+    reference_links = [(link, score) for link, score in scored_links if link['type'] in ['reference', 'content']]
     
-    # First add content links (higher priority)
-    for link, score in content_links[:max_docs]:
+    for link, score in document_files[:max_docs]:
         result_links.append(link)
     
-    # Fill remaining slots with document files
     remaining_slots = max_docs - len(result_links)
-    for link, score in document_files[:remaining_slots]:
+    for link, score in reference_links[:remaining_slots]:
         result_links.append(link)
     
     return result_links
@@ -85,15 +77,7 @@ def calculate_context_relevance_score(link_info, query, ai_response):
     query_lower = query.lower()
     response_lower = ai_response.lower()
     
-    # Prioritize content/reference links over direct document downloads
-    if link_info['type'] in ['content', 'reference']:
-        score += 20  # Higher base score for content links
-    elif link_info['type'] == 'document':
-        score += 10
-    
-    # Additional priority boost for links from important columns
-    column_info = link_info.get('column_info', {})
-    if column_info.get('is_primary_content', False):
+    if link_info['type'] == 'document':
         score += 15
     
     query_words = [word for word in query_lower.split() if len(word) > 3]
@@ -143,143 +127,34 @@ def calculate_context_relevance_score(link_info, query, ai_response):
 def enhanced_web_scrape(url):
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
         }
         
         session = requests.Session()
         session.headers.update(headers)
         
-        # Try multiple requests to handle dynamic content
-        response = session.get(url, timeout=20)
+        response = session.get(url, timeout=15)
         response.raise_for_status()
-        
-        # Wait a bit for any JavaScript to execute (though this won't help with client-side JS)
-        time.sleep(2)
-        
         return response.text
         
     except Exception as e:
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
-def extract_dynamic_content_patterns(html_content, url):
-    """
-    Extract content that might be loaded dynamically or through APIs
-    """
-    soup = BeautifulSoup(html_content, 'html.parser')
-    dynamic_links = []
-    
-    # Look for JSON data embedded in the page
-    scripts = soup.find_all('script')
-    for script in scripts:
-        if script.string:
-            script_content = script.string
-            
-            # Look for JSON arrays that might contain document information
-            json_patterns = [
-                r'(?:documents|files|items|data)\s*:\s*(\[.*?\])',
-                r'var\s+(?:documents|files|items|data)\s*=\s*(\[.*?\]);',
-                r'(?:documents|files|items|data)\s*=\s*(\[.*?\]);'
-            ]
-            
-            for pattern in json_patterns:
-                matches = re.findall(pattern, script_content, re.DOTALL | re.IGNORECASE)
-                for match in matches:
-                    try:
-                        # Try to parse as JSON (this is a simplified approach)
-                        # In a real implementation, you'd want more robust JSON parsing
-                        if 'title' in match.lower() and 'url' in match.lower():
-                            # This indicates structured data that might contain document links
-                            # For now, we'll extract text patterns that look like documents
-                            doc_titles = re.findall(r'"title"\s*:\s*"([^"]+)"', match)
-                            doc_urls = re.findall(r'"(?:url|link|href)"\s*:\s*"([^"]+)"', match)
-                            
-                            for title, doc_url in zip(doc_titles, doc_urls):
-                                if len(title) > 5:
-                                    full_url = urljoin(url, doc_url) if not doc_url.startswith(('http://', 'https://')) else doc_url
-                                    dynamic_links.append({
-                                        'title': title,
-                                        'link': full_url,
-                                        'type': 'content',
-                                        'context': 'Extracted from dynamic content',
-                                        'priority': 4,
-                                        'column_info': {'is_primary_content': True, 'source': 'dynamic_json'}
-                                    })
-                    except:
-                        continue
-    
-    return dynamic_links
-
-def detect_content_column(table_rows):
-    """
-    Intelligently detect which column likely contains the main content links
-    """
-    if not table_rows:
-        return None
-    
-    # Analyze header row to identify potential content columns
-    header_row = table_rows[0] if table_rows else None
-    if not header_row:
-        return None
-    
-    headers = header_row.find_all(['th', 'td'])
-    content_column_candidates = []
-    
-    for idx, header in enumerate(headers):
-        header_text = header.get_text(strip=True).lower()
-        
-        # Look for headers that suggest main content
-        content_indicators = [
-            'title', 'subtitle', 'sub title', 'name', 'description', 'subject',
-            'act', 'regulation', 'circular', 'guideline', 'policy', 'document',
-            'short description', 'details'
-        ]
-        
-        score = 0
-        for indicator in content_indicators:
-            if indicator in header_text:
-                score += len(indicator)  # Longer matches get higher scores
-        
-        if score > 0:
-            content_column_candidates.append((idx, score, header_text))
-    
-    # Sort by score and return the best candidate
-    if content_column_candidates:
-        content_column_candidates.sort(key=lambda x: x[1], reverse=True)
-        return content_column_candidates[0][0]  # Return column index
-    
-    # Fallback: look for columns with most links in data rows
-    column_link_counts = defaultdict(int)
-    for row in table_rows[1:6]:  # Check first few data rows
-        cells = row.find_all(['td', 'th'])
-        for idx, cell in enumerate(cells):
-            links = cell.find_all('a', href=True)
-            column_link_counts[idx] += len(links)
-    
-    if column_link_counts:
-        best_column = max(column_link_counts.items(), key=lambda x: x[1])
-        return best_column[0]
-    
-    return None
-
 def extract_document_links_with_context(html_content, url):
 
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Don't remove scripts initially - we need to analyze them for dynamic links
+    for script in soup(["script", "style"]):
+        script.decompose()
+    
     document_links = []
     document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
     
-    # First, extract regular links (keeping existing functionality)
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -311,158 +186,10 @@ def extract_document_links_with_context(html_content, url):
                 'title': link_text,
                 'link': href,
                 'type': 'document' if is_document_link else 'content',
-                'context': context_text[:300],
-                'priority': 1 if is_document_link else 2,  # Content links get higher priority
-                'column_info': {'is_primary_content': False}
+                'context': context_text[:300]
             })
     
-    # Extract JavaScript-based links and dynamic content
-    js_links = extract_javascript_links(soup, url)
-    document_links.extend(js_links)
-    
-    # Extract clickable elements that aren't traditional links
-    clickable_elements = extract_clickable_elements(soup, url)
-    document_links.extend(clickable_elements)
-    
-    # Now remove scripts and styles for table processing
-    for script in soup(["script", "style"]):
-        script.decompose()
-    
-def extract_javascript_links(soup, base_url):
-    """
-    Extract links from JavaScript code, data attributes, and onclick handlers
-    """
-    js_links = []
-    
-    # Look for script tags with URLs
-    scripts = soup.find_all('script')
-    for script in scripts:
-        if script.string:
-            script_content = script.string
-            
-            # Look for URL patterns in JavaScript
-            url_patterns = [
-                r'["\']([^"\']*\.(?:pdf|doc|docx|xls|xlsx))["\']',  # Direct file references
-                r'window\.open\(["\']([^"\']+)["\']',  # window.open calls
-                r'location\.href\s*=\s*["\']([^"\']+)["\']',  # location.href assignments
-                r'href\s*:\s*["\']([^"\']+)["\']',  # href properties
-                r'url\s*:\s*["\']([^"\']+)["\']',  # url properties
-            ]
-            
-            for pattern in url_patterns:
-                matches = re.findall(pattern, script_content, re.IGNORECASE)
-                for match in matches:
-                    if len(match) > 5:  # Basic validation
-                        full_url = urljoin(base_url, match) if not match.startswith(('http://', 'https://')) else match
-                        js_links.append({
-                            'title': match.split('/')[-1] if '/' in match else match,
-                            'link': full_url,
-                            'type': 'document' if any(ext in match.lower() for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']) else 'content',
-                            'context': 'Extracted from JavaScript',
-                            'priority': 3,
-                            'column_info': {'is_primary_content': False, 'source': 'javascript'}
-                        })
-    
-    return js_links
-
-def extract_clickable_elements(soup, base_url):
-    """
-    Extract links from clickable elements that aren't traditional <a> tags
-    """
-    clickable_links = []
-    
-    # Look for elements with onclick, data-url, data-href, data-link attributes
-    clickable_selectors = [
-        '[onclick]',
-        '[data-url]',
-        '[data-href]',
-        '[data-link]',
-        '[data-file]',
-        '[data-download]',
-        '.clickable',
-        '.download-link',
-        '.file-link',
-        '.document-link'
-    ]
-    
-    for selector in clickable_selectors:
-        elements = soup.select(selector)
-        for element in elements:
-            link_url = None
-            element_text = element.get_text(strip=True)
-            
-            # Check various attributes for URLs
-            for attr in ['data-url', 'data-href', 'data-link', 'data-file', 'data-download']:
-                if element.get(attr):
-                    link_url = element.get(attr)
-                    break
-            
-            # Parse onclick handlers for URLs
-            if not link_url and element.get('onclick'):
-                onclick = element.get('onclick')
-                url_match = re.search(r'["\']([^"\']*(?:\.(?:pdf|doc|docx|xls|xlsx)|/[^"\']*|http[^"\']*)[^"\']*)["\']', onclick)
-                if url_match:
-                    link_url = url_match.group(1)
-            
-            if link_url and len(element_text) > 3:
-                if link_url.startswith('/'):
-                    link_url = urljoin(base_url, link_url)
-                elif not link_url.startswith(('http://', 'https://')):
-                    link_url = urljoin(base_url, link_url)
-                
-                # Get context from parent elements
-                context_text = ""
-                parent = element.parent
-                if parent:
-                    context_text = parent.get_text(strip=True)
-                    if len(context_text) < 50 and parent.parent:
-                        context_text = parent.parent.get_text(strip=True)
-                
-                is_document = any(ext in link_url.lower() for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx'])
-                
-                clickable_links.append({
-                    'title': element_text,
-                    'link': link_url,
-                    'type': 'document' if is_document else 'content',
-                    'context': context_text[:300],
-                    'priority': 4,  # High priority for explicitly clickable elements
-                    'column_info': {'is_primary_content': True, 'source': 'clickable_element'}
-                })
-    
-    # Look for list items that might be clickable documents
-    list_items = soup.find_all(['li', 'div'], class_=lambda x: x and any(
-        keyword in x.lower() for keyword in ['document', 'file', 'download', 'item', 'entry', 'list-item']
-    ))
-    
-    for item in list_items:
-        item_text = item.get_text(strip=True)
-        
-        # Look for document-like patterns in the text
-        doc_patterns = [
-            r'(.+?(?:act|amendment|circular|guideline|regulation|rule|notification|order|policy).*?)(?:\d+\.\d+\s*MB|\d+\s*KB|\d{1,2}\s*[A-Za-z]{3}\s*\d{4})',
-            r'(\d+\.\s*.+?(?:act|amendment|circular|guideline|regulation|rule|notification|order|policy).*?)(?:\d+\.\d+\s*MB|\d+\s*KB)',
-        ]
-        
-        for pattern in doc_patterns:
-            match = re.search(pattern, item_text, re.IGNORECASE | re.DOTALL)
-            if match:
-                title = match.group(1).strip()
-                if len(title) > 10:
-                    # Try to construct a reasonable URL based on the title and context
-                    # This is a best-guess approach for dynamically loaded content
-                    potential_url = f"{base_url}#{title}"  # Placeholder URL
-                    
-                    clickable_links.append({
-                        'title': title,
-                        'link': potential_url,
-                        'type': 'content',
-                        'context': item_text[:300],
-                        'priority': 3,
-                        'column_info': {'is_primary_content': True, 'source': 'list_item'}
-                    })
-                    break
-    
-    return clickable_links
+    tables = soup.find_all('table')
     for table in tables:
         table_context = ""
         prev_sibling = table.find_previous_sibling(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
@@ -470,26 +197,12 @@ def extract_clickable_elements(soup, base_url):
             table_context = prev_sibling.get_text(strip=True)
         
         rows = table.find_all('tr')
-        if not rows:
-            continue
-        
-        # Detect the primary content column
-        primary_content_column = detect_content_column(rows)
-        
-        for row_idx, row in enumerate(rows):
-            if row_idx == 0:  # Skip header row
-                continue
-                
+        for row in rows:
             cells = row.find_all(['td', 'th'])
             row_text = ' '.join(cell.get_text(strip=True) for cell in cells)
             
-            for cell_idx, cell in enumerate(cells):
+            for cell in cells:
                 links_in_cell = cell.find_all('a', href=True)
-                
-                # Determine if this cell is in the primary content column
-                is_primary_content = (primary_content_column is not None and 
-                                    cell_idx == primary_content_column)
-                
                 for link in links_in_cell:
                     href = link.get('href')
                     link_text = link.get_text(strip=True)
@@ -506,53 +219,27 @@ def extract_clickable_elements(soup, base_url):
                     
                     document_patterns = [
                         r'act.*\d{4}', r'circular.*\d+', r'amendment.*act', r'insurance.*act',
-                        r'guideline', r'master.*direction', r'regulation.*\d+', r'notification.*\d+'
+                        r'guideline', r'master.*direction', r'regulation.*\d+'
                     ]
                     
                     is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
                     is_document_extension = any(ext in href.lower() for ext in document_extensions)
                     
-                    # Determine link type and priority
-                    if is_document_extension:
-                        link_type = 'document'
-                        priority = 2
-                    elif is_primary_content:
-                        link_type = 'content'
-                        priority = 5  # Highest priority for primary content column
-                    elif is_likely_document:
-                        link_type = 'reference'
-                        priority = 4
-                    else:
-                        link_type = 'reference'
-                        priority = 3
-                    
-                    document_links.append({
-                        'title': link_text,
-                        'link': href,
-                        'type': link_type,
-                        'context': combined_context[:300],
-                        'priority': priority,
-                        'column_info': {
-                            'is_primary_content': is_primary_content,
-                            'column_index': cell_idx,
-                            'row_index': row_idx
-                        }
-                    })
+                    if is_likely_document or is_document_extension:
+                        document_links.append({
+                            'title': link_text,
+                            'link': href,
+                            'type': 'document' if is_document_extension else 'reference',
+                            'context': combined_context[:300]
+                        })
     
-    # Remove duplicates while preserving the highest priority version
-    seen_links = {}
+    seen_links = set()
     unique_document_links = []
-    
     for link_info in document_links:
-        link_key = (link_info['title'].strip(), link_info['link'])
-        
-        if link_key not in seen_links or link_info['priority'] > seen_links[link_key]['priority']:
-            seen_links[link_key] = link_info
-    
-    unique_document_links = list(seen_links.values())
-    
-    # Sort by priority (highest first)
-    unique_document_links.sort(key=lambda x: x['priority'], reverse=True)
+        link_key = (link_info['title'], link_info['link'])
+        if link_key not in seen_links:
+            seen_links.add(link_key)
+            unique_document_links.append(link_info)
     
     return unique_document_links
 
@@ -610,25 +297,17 @@ def load_hardcoded_websites():
                     with st.expander(f"Document Links found from {url}"):
                         st.write(f"**Total documents found:** {len(sections['document_links'])}")
                         
-                        # Group by priority and type
-                        content_links = [link for link in sections['document_links'] if link['type'] == 'content']
-                        ref_links = [link for link in sections['document_links'] if link['type'] == 'reference']
                         pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
-                        
-                        if content_links:
-                            st.write("**Primary Content Links (from main content columns):**")
-                            for i, link_info in enumerate(content_links[:10]):
-                                priority_indicator = "🔥" if link_info.get('column_info', {}).get('is_primary_content', False) else ""
-                                st.write(f"{i+1}. {priority_indicator}[{link_info['title']}]({link_info['link']})")
-                        
-                        if ref_links:
-                            st.write("**Reference Links:**")
-                            for i, link_info in enumerate(ref_links[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
                         
                         if pdf_docs:
                             st.write("**Direct Document Downloads:**")
                             for i, link_info in enumerate(pdf_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        if ref_docs:
+                            st.write("**Document References:**")
+                            for i, link_info in enumerate(ref_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
                     st.write(f"No document links found from {url}")
@@ -736,27 +415,20 @@ if st.button("Get Answer") and query:
                 )
                 
                 if relevant_docs:
-                    st.write("\n**Related Documents (prioritized by relevance and source):**")
+                    st.write("\n**Related Documents (from answer context):**")
                     
-                    # Group documents by type with new priority system
-                    content_links = [doc for doc in relevant_docs if doc['type'] == 'content']
-                    ref_links = [doc for doc in relevant_docs if doc['type'] == 'reference']
                     doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
-                    
-                    if content_links:
-                        st.write("**📋 Primary Content Links (from main content columns):**")
-                        for i, link_info in enumerate(content_links, 1):
-                            priority_indicator = "🔥 " if link_info.get('column_info', {}).get('is_primary_content', False) else ""
-                            st.write(f"{i}. {priority_indicator}[{link_info['title']}]({link_info['link']})")
-                    
-                    if ref_links:
-                        st.write("**🔗 Reference Links:**")
-                        for i, link_info in enumerate(ref_links, 1):
-                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                    ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
                     
                     if doc_files:
-                        st.write("**📄 Direct Document Downloads:**")
+                        st.write("**Direct Document Downloads:**")
                         for i, link_info in enumerate(doc_files, 1):
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                            
+                    
+                    if ref_files:
+                        st.write("**Related References:**")
+                        for i, link_info in enumerate(ref_files, 1):
                             st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                 else:
                     st.info("No specific documents found in the context used for this answer.")
