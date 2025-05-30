@@ -16,7 +16,7 @@ from collections import defaultdict
 
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework"
+                     "https://uidai.gov.in/en/my-aadhaar/downloads/acts-and-rules.html"
                      ]
 
 def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_docs=3):
@@ -143,23 +143,81 @@ def calculate_context_relevance_score(link_info, query, ai_response):
 def enhanced_web_scrape(url):
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
         }
         
         session = requests.Session()
         session.headers.update(headers)
         
-        response = session.get(url, timeout=15)
+        # Try multiple requests to handle dynamic content
+        response = session.get(url, timeout=20)
         response.raise_for_status()
+        
+        # Wait a bit for any JavaScript to execute (though this won't help with client-side JS)
+        time.sleep(2)
+        
         return response.text
         
     except Exception as e:
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
+
+def extract_dynamic_content_patterns(html_content, url):
+    """
+    Extract content that might be loaded dynamically or through APIs
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    dynamic_links = []
+    
+    # Look for JSON data embedded in the page
+    scripts = soup.find_all('script')
+    for script in scripts:
+        if script.string:
+            script_content = script.string
+            
+            # Look for JSON arrays that might contain document information
+            json_patterns = [
+                r'(?:documents|files|items|data)\s*:\s*(\[.*?\])',
+                r'var\s+(?:documents|files|items|data)\s*=\s*(\[.*?\]);',
+                r'(?:documents|files|items|data)\s*=\s*(\[.*?\]);'
+            ]
+            
+            for pattern in json_patterns:
+                matches = re.findall(pattern, script_content, re.DOTALL | re.IGNORECASE)
+                for match in matches:
+                    try:
+                        # Try to parse as JSON (this is a simplified approach)
+                        # In a real implementation, you'd want more robust JSON parsing
+                        if 'title' in match.lower() and 'url' in match.lower():
+                            # This indicates structured data that might contain document links
+                            # For now, we'll extract text patterns that look like documents
+                            doc_titles = re.findall(r'"title"\s*:\s*"([^"]+)"', match)
+                            doc_urls = re.findall(r'"(?:url|link|href)"\s*:\s*"([^"]+)"', match)
+                            
+                            for title, doc_url in zip(doc_titles, doc_urls):
+                                if len(title) > 5:
+                                    full_url = urljoin(url, doc_url) if not doc_url.startswith(('http://', 'https://')) else doc_url
+                                    dynamic_links.append({
+                                        'title': title,
+                                        'link': full_url,
+                                        'type': 'content',
+                                        'context': 'Extracted from dynamic content',
+                                        'priority': 4,
+                                        'column_info': {'is_primary_content': True, 'source': 'dynamic_json'}
+                                    })
+                    except:
+                        continue
+    
+    return dynamic_links
 
 def detect_content_column(table_rows):
     """
@@ -217,9 +275,7 @@ def extract_document_links_with_context(html_content, url):
 
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    for script in soup(["script", "style"]):
-        script.decompose()
-    
+    # Don't remove scripts initially - we need to analyze them for dynamic links
     document_links = []
     document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
     
@@ -260,8 +316,153 @@ def extract_document_links_with_context(html_content, url):
                 'column_info': {'is_primary_content': False}
             })
     
-    # Enhanced table processing with intelligent column detection
-    tables = soup.find_all('table')
+    # Extract JavaScript-based links and dynamic content
+    js_links = extract_javascript_links(soup, url)
+    document_links.extend(js_links)
+    
+    # Extract clickable elements that aren't traditional links
+    clickable_elements = extract_clickable_elements(soup, url)
+    document_links.extend(clickable_elements)
+    
+    # Now remove scripts and styles for table processing
+    for script in soup(["script", "style"]):
+        script.decompose()
+    
+def extract_javascript_links(soup, base_url):
+    """
+    Extract links from JavaScript code, data attributes, and onclick handlers
+    """
+    js_links = []
+    
+    # Look for script tags with URLs
+    scripts = soup.find_all('script')
+    for script in scripts:
+        if script.string:
+            script_content = script.string
+            
+            # Look for URL patterns in JavaScript
+            url_patterns = [
+                r'["\']([^"\']*\.(?:pdf|doc|docx|xls|xlsx))["\']',  # Direct file references
+                r'window\.open\(["\']([^"\']+)["\']',  # window.open calls
+                r'location\.href\s*=\s*["\']([^"\']+)["\']',  # location.href assignments
+                r'href\s*:\s*["\']([^"\']+)["\']',  # href properties
+                r'url\s*:\s*["\']([^"\']+)["\']',  # url properties
+            ]
+            
+            for pattern in url_patterns:
+                matches = re.findall(pattern, script_content, re.IGNORECASE)
+                for match in matches:
+                    if len(match) > 5:  # Basic validation
+                        full_url = urljoin(base_url, match) if not match.startswith(('http://', 'https://')) else match
+                        js_links.append({
+                            'title': match.split('/')[-1] if '/' in match else match,
+                            'link': full_url,
+                            'type': 'document' if any(ext in match.lower() for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']) else 'content',
+                            'context': 'Extracted from JavaScript',
+                            'priority': 3,
+                            'column_info': {'is_primary_content': False, 'source': 'javascript'}
+                        })
+    
+    return js_links
+
+def extract_clickable_elements(soup, base_url):
+    """
+    Extract links from clickable elements that aren't traditional <a> tags
+    """
+    clickable_links = []
+    
+    # Look for elements with onclick, data-url, data-href, data-link attributes
+    clickable_selectors = [
+        '[onclick]',
+        '[data-url]',
+        '[data-href]',
+        '[data-link]',
+        '[data-file]',
+        '[data-download]',
+        '.clickable',
+        '.download-link',
+        '.file-link',
+        '.document-link'
+    ]
+    
+    for selector in clickable_selectors:
+        elements = soup.select(selector)
+        for element in elements:
+            link_url = None
+            element_text = element.get_text(strip=True)
+            
+            # Check various attributes for URLs
+            for attr in ['data-url', 'data-href', 'data-link', 'data-file', 'data-download']:
+                if element.get(attr):
+                    link_url = element.get(attr)
+                    break
+            
+            # Parse onclick handlers for URLs
+            if not link_url and element.get('onclick'):
+                onclick = element.get('onclick')
+                url_match = re.search(r'["\']([^"\']*(?:\.(?:pdf|doc|docx|xls|xlsx)|/[^"\']*|http[^"\']*)[^"\']*)["\']', onclick)
+                if url_match:
+                    link_url = url_match.group(1)
+            
+            if link_url and len(element_text) > 3:
+                if link_url.startswith('/'):
+                    link_url = urljoin(base_url, link_url)
+                elif not link_url.startswith(('http://', 'https://')):
+                    link_url = urljoin(base_url, link_url)
+                
+                # Get context from parent elements
+                context_text = ""
+                parent = element.parent
+                if parent:
+                    context_text = parent.get_text(strip=True)
+                    if len(context_text) < 50 and parent.parent:
+                        context_text = parent.parent.get_text(strip=True)
+                
+                is_document = any(ext in link_url.lower() for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx'])
+                
+                clickable_links.append({
+                    'title': element_text,
+                    'link': link_url,
+                    'type': 'document' if is_document else 'content',
+                    'context': context_text[:300],
+                    'priority': 4,  # High priority for explicitly clickable elements
+                    'column_info': {'is_primary_content': True, 'source': 'clickable_element'}
+                })
+    
+    # Look for list items that might be clickable documents
+    list_items = soup.find_all(['li', 'div'], class_=lambda x: x and any(
+        keyword in x.lower() for keyword in ['document', 'file', 'download', 'item', 'entry', 'list-item']
+    ))
+    
+    for item in list_items:
+        item_text = item.get_text(strip=True)
+        
+        # Look for document-like patterns in the text
+        doc_patterns = [
+            r'(.+?(?:act|amendment|circular|guideline|regulation|rule|notification|order|policy).*?)(?:\d+\.\d+\s*MB|\d+\s*KB|\d{1,2}\s*[A-Za-z]{3}\s*\d{4})',
+            r'(\d+\.\s*.+?(?:act|amendment|circular|guideline|regulation|rule|notification|order|policy).*?)(?:\d+\.\d+\s*MB|\d+\s*KB)',
+        ]
+        
+        for pattern in doc_patterns:
+            match = re.search(pattern, item_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                title = match.group(1).strip()
+                if len(title) > 10:
+                    # Try to construct a reasonable URL based on the title and context
+                    # This is a best-guess approach for dynamically loaded content
+                    potential_url = f"{base_url}#{title}"  # Placeholder URL
+                    
+                    clickable_links.append({
+                        'title': title,
+                        'link': potential_url,
+                        'type': 'content',
+                        'context': item_text[:300],
+                        'priority': 3,
+                        'column_info': {'is_primary_content': True, 'source': 'list_item'}
+                    })
+                    break
+    
+    return clickable_links
     for table in tables:
         table_context = ""
         prev_sibling = table.find_previous_sibling(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
@@ -385,6 +586,79 @@ def extract_structured_content(html_content, url):
 
 def load_hardcoded_websites():
     loaded_docs = []
+    
+    for url in HARDCODED_WEBSITES:
+        try:
+            st.write(f"Loading URL: {url}")
+            
+            html_content = enhanced_web_scrape(url)
+            if html_content:
+                clean_text, sections = extract_structured_content(html_content, url)
+                
+                doc = Document(
+                    page_content=clean_text,
+                    metadata={"source": url, "sections": sections}
+                )
+                loaded_docs.append(doc)
+                
+                if sections.get('news'):
+                    with st.expander(f"News/Updates found from {url}"):
+                        for i, news_item in enumerate(sections['news'][:3]):
+                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
+                
+                if sections.get('document_links'):
+                    with st.expander(f"Document Links found from {url} (Debug Info)"):
+                        st.write(f"**Total documents found:** {len(sections['document_links'])}")
+                        
+                        # Debug information
+                        sources = {}
+                        for link in sections['document_links']:
+                            source = link.get('column_info', {}).get('source', 'unknown')
+                            sources[source] = sources.get(source, 0) + 1
+                        
+                        st.write("**Link Sources:**")
+                        for source, count in sources.items():
+                            st.write(f"- {source}: {count} links")
+                        
+                        # Group by priority and type
+                        content_links = [link for link in sections['document_links'] if link['type'] == 'content']
+                        ref_links = [link for link in sections['document_links'] if link['type'] == 'reference']
+                        pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
+                        
+                        if content_links:
+                            st.write("**Primary Content Links (from main content columns):**")
+                            for i, link_info in enumerate(content_links[:15]):
+                                priority_indicator = "🔥" if link_info.get('column_info', {}).get('is_primary_content', False) else ""
+                                source_indicator = f"[{link_info.get('column_info', {}).get('source', 'unknown')}]"
+                                st.write(f"{i+1}. {priority_indicator}{source_indicator} [{link_info['title'][:100]}...]({link_info['link']})")
+                        
+                        if ref_links:
+                            st.write("**Reference Links:**")
+                            for i, link_info in enumerate(ref_links[:10]):
+                                source_indicator = f"[{link_info.get('column_info', {}).get('source', 'unknown')}]"
+                                st.write(f"{i+1}. {source_indicator} [{link_info['title'][:100]}...]({link_info['link']})")
+                        
+                        if pdf_docs:
+                            st.write("**Direct Document Downloads:**")
+                            for i, link_info in enumerate(pdf_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        # Show raw HTML sample for debugging
+                        st.write("**Raw HTML Sample (first 1000 chars):**")
+                        st.code(html_content[:1000], language='html')
+                else:
+                    st.write(f"No document links found from {url}")
+                    st.write("**Raw HTML Sample for debugging:**")
+                    st.code(html_content[:1000] if html_content else "No content", language='html')
+            
+            st.success(f"Successfully loaded content from {url}")
+            
+        except Exception as e:
+            st.error(f"Error loading {url}: {e}")
+            import traceback
+            st.error(f"Detailed error: {traceback.format_exc()}")
+    
+    return loaded_docs
     
     for url in HARDCODED_WEBSITES:
         try:
