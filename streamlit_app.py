@@ -329,21 +329,6 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
-def create_redirect_link(document_title, document_url, redirect_page_url="https://your-redirect-page.com"):
-    """
-    Create a redirect link instead of direct document link
-    You can customize the redirect_page_url to your desired page
-    """
-    # Encode the original document URL and title for passing as parameters
-    import urllib.parse
-    encoded_url = urllib.parse.quote(document_url)
-    encoded_title = urllib.parse.quote(document_title)
-    
-    # Create redirect URL with parameters
-    redirect_url = f"{redirect_page_url}?doc_url={encoded_url}&doc_title={encoded_title}"
-    
-    return redirect_url
-
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -355,12 +340,7 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-# Configuration for redirect page URL
-REDIRECT_PAGE_URL = st.text_input("Redirect Page URL:", 
-                                  value="https://your-custom-page.com/document-viewer", 
-                                  help="Enter the URL where users should be redirected instead of direct PDF links")
-
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
@@ -441,33 +421,15 @@ if st.button("Get Answer") and query:
                     ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
                     
                     if doc_files:
-                        st.write("**Document Access Links:**")
+                        st.write("**Direct Document Downloads:**")
                         for i, link_info in enumerate(doc_files, 1):
-                            # Create redirect link instead of direct PDF link
-                            redirect_url = create_redirect_link(
-                                link_info['title'], 
-                                link_info['link'],
-                                REDIRECT_PAGE_URL
-                            )
-                            st.markdown(f"{i}. [📄 {link_info['title']}]({redirect_url})")
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                             
-                            # Optional: Show original link in smaller text for reference
-                            with st.expander(f"Details for: {link_info['title'][:50]}..."):
-                                st.write(f"**Original Document URL:** {link_info['link']}")
-                                st.write(f"**Document Type:** {link_info['type']}")
-                                if 'context' in link_info:
-                                    st.write(f"**Context:** {link_info.get('context', 'N/A')[:200]}...")
                     
                     if ref_files:
                         st.write("**Related References:**")
                         for i, link_info in enumerate(ref_files, 1):
-                            # Also apply redirect logic to reference files if needed
-                            redirect_url = create_redirect_link(
-                                link_info['title'], 
-                                link_info['link'],
-                                REDIRECT_PAGE_URL
-                            )
-                            st.markdown(f"{i}. [🔗 {link_info['title']}]({redirect_url})")
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                 else:
                     st.info("No specific documents found in the context used for this answer.")
                 
