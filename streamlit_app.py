@@ -31,15 +31,17 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
             chunk_doc_links = doc_metadata['sections']['document_links']
             
             for link_info in chunk_doc_links:
-                enhanced_link = {
-                    'title': link_info['title'],
-                    'link': link_info['link'],
-                    'type': link_info['type'],
-                    'source_chunk': doc_content[:500] + "..." if len(doc_content) > 500 else doc_content,
-                    'source_url': doc_metadata.get('source', ''),
-                    'relevance_context': doc_content
-                }
-                relevant_document_links.append(enhanced_link)
+                # Filter out PDF and other direct download links
+                if not is_direct_download_link(link_info['link']):
+                    enhanced_link = {
+                        'title': link_info['title'],
+                        'link': link_info['link'],
+                        'type': link_info['type'],
+                        'source_chunk': doc_content[:500] + "..." if len(doc_content) > 500 else doc_content,
+                        'source_url': doc_metadata.get('source', ''),
+                        'relevance_context': doc_content
+                    }
+                    relevant_document_links.append(enhanced_link)
     
     seen_links = set()
     unique_links = []
@@ -56,15 +58,9 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
     
     scored_links.sort(key=lambda x: x[1], reverse=True)
     
+    # Only return redirectable links (no document type filtering)
     result_links = []
-    document_files = [(link, score) for link, score in scored_links if link['type'] == 'document']
-    reference_links = [(link, score) for link, score in scored_links if link['type'] in ['reference', 'content']]
-    
-    for link, score in document_files[:max_docs]:
-        result_links.append(link)
-    
-    remaining_slots = max_docs - len(result_links)
-    for link, score in reference_links[:remaining_slots]:
+    for link, score in scored_links[:max_docs]:
         result_links.append(link)
     
     return result_links
