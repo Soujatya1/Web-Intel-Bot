@@ -15,7 +15,8 @@ from urllib.parse import urljoin, urlparse
 from collections import defaultdict
 
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework"
                      ]
 
 def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_docs=3):
