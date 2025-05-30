@@ -58,17 +58,12 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
     
     scored_links.sort(key=lambda x: x[1], reverse=True)
     
+    # Only return redirectable links (no document type filtering)
     result_links = []
     for link, score in scored_links[:max_docs]:
         result_links.append(link)
     
     return result_links
-
-def is_direct_download_link(url):
-    """Check if a URL is a direct download link (PDF, DOC, etc.)"""
-    download_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.zip', '.rar']
-    url_lower = url.lower()
-    return any(ext in url_lower for ext in download_extensions)
 
 def calculate_context_relevance_score(link_info, query, ai_response):
     
@@ -183,12 +178,11 @@ def extract_document_links_with_context(html_content, url):
                            'notification', 'order', 'policy', 'master', 'framework', 'directive']
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
-        # Only include non-download links
-        if (has_doc_keywords or is_document_link) and not is_direct_download_link(href):
+        if is_document_link or has_doc_keywords:
             document_links.append({
                 'title': link_text,
                 'link': href,
-                'type': 'content',  # Mark all as content since we're filtering out direct downloads
+                'type': 'document' if is_document_link else 'content',
                 'context': context_text[:300]
             })
     
@@ -218,10 +212,6 @@ def extract_document_links_with_context(html_content, url):
                     elif not href.startswith(('http://', 'https://')):
                         href = urljoin(url, href)
                     
-                    # Skip direct download links
-                    if is_direct_download_link(href):
-                        continue
-                    
                     combined_context = f"{table_context} {row_text}".strip()
                     
                     document_patterns = [
@@ -230,12 +220,13 @@ def extract_document_links_with_context(html_content, url):
                     ]
                     
                     is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
+                    is_document_extension = any(ext in href.lower() for ext in document_extensions)
                     
-                    if is_likely_document:
+                    if is_likely_document or is_document_extension:
                         document_links.append({
                             'title': link_text,
                             'link': href,
-                            'type': 'reference',
+                            'type': 'document' if is_document_extension else 'reference',
                             'context': combined_context[:300]
                         })
     
