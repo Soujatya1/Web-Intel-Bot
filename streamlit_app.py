@@ -58,7 +58,6 @@ def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_do
     
     scored_links.sort(key=lambda x: x[1], reverse=True)
     
-    # Only return redirectable links (no document type filtering)
     result_links = []
     for link, score in scored_links[:max_docs]:
         result_links.append(link)
@@ -80,8 +79,7 @@ def calculate_context_relevance_score(link_info, query, ai_response):
     query_lower = query.lower()
     response_lower = ai_response.lower()
     
-    # Boost score for web pages/redirectable content
-    if link_info['type'] in ['content', 'reference']:
+    if link_info['type'] == 'document':
         score += 15
     
     query_words = [word for word in query_lower.split() if len(word) > 3]
@@ -302,23 +300,23 @@ def load_hardcoded_websites():
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
                 if sections.get('document_links'):
-                    with st.expander(f"Redirectable Links found from {url}"):
-                        st.write(f"**Total redirectable links found:** {len(sections['document_links'])}")
+                    with st.expander(f"Document Links found from {url}"):
+                        st.write(f"**Total documents found:** {len(sections['document_links'])}")
                         
-                        content_links = [link for link in sections['document_links'] if link['type'] == 'content']
-                        ref_links = [link for link in sections['document_links'] if link['type'] == 'reference']
+                        pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
+                        ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
                         
-                        if content_links:
-                            st.write("**Content Pages:**")
-                            for i, link_info in enumerate(content_links[:10]):
+                        if pdf_docs:
+                            st.write("**Direct Document Downloads:**")
+                            for i, link_info in enumerate(pdf_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         
-                        if ref_links:
-                            st.write("**Reference Pages:**")
-                            for i, link_info in enumerate(ref_links[:10]):
+                        if ref_docs:
+                            st.write("**Document References:**")
+                            for i, link_info in enumerate(ref_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.write(f"No redirectable links found from {url}")
+                    st.write(f"No document links found from {url}")
             
             st.success(f"Successfully loaded content from {url}")
             
@@ -382,7 +380,7 @@ if not st.session_state['docs_loaded']:
                     
                     Question: {input}
                     
-                    Answer with specific details, dates. If relevant documents are mentioned, note that related web pages may be available in the sources section.
+                    Answer with specific details, dates. If relevant documents are mentioned, note that direct links may be available in the sources section.
                     """
                 )
                 
@@ -423,12 +421,23 @@ if st.button("Get Answer") and query:
                 )
                 
                 if relevant_docs:
-                    st.write("\n**Related Web Pages (from answer context):**")
+                    st.write("\n**Related Documents (from answer context):**")
                     
-                    for i, link_info in enumerate(relevant_docs, 1):
-                        st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                    doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
+                    ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
+                    
+                    if doc_files:
+                        st.write("**Direct Document Downloads:**")
+                        for i, link_info in enumerate(doc_files, 1):
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
+                            
+                    
+                    if ref_files:
+                        st.write("**Related References:**")
+                        for i, link_info in enumerate(ref_files, 1):
+                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.info("No specific web pages found in the context used for this answer.")
+                    st.info("No specific documents found in the context used for this answer.")
                 
                 st.write("\n**Information Sources:**")
                 sources = set()
