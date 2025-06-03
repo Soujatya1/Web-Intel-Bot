@@ -265,7 +265,7 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
