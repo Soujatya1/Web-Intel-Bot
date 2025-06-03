@@ -12,16 +12,17 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
+from collections import Counter
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://uidai.gov.in/en/about-uidai/legal-framework/rules"
                      ]
 
-def filter_relevant_documents_with_llm(document_links, query, ai_response, llm, max_docs=3):
+def smart_document_filter(document_links, query, ai_response, max_docs=3):
     """
-    Use LLM to intelligently filter document links based on query and AI response relevance
+    Intelligent document filtering using enhanced keyword matching and relevance scoring
     """
-    if not document_links or not llm:
+    if not document_links:
         return []
     
     # First, basic filtering to remove obviously irrelevant links
@@ -36,87 +37,58 @@ def filter_relevant_documents_with_llm(document_links, query, ai_response, llm, 
     if not filtered_docs:
         return []
     
-    # Prepare document titles and links for LLM evaluation
-    doc_list = []
-    for i, doc in enumerate(filtered_docs):
-        doc_list.append(f"{i+1}. {doc['title']} - {doc['link']}")
+    # Extract key terms from query and AI response
+    query_terms = extract_key_terms(query.lower())
+    response_terms = extract_key_terms(ai_response.lower())
     
-    doc_text = "\n".join(doc_list)
+    # Define domain-specific keywords with weights
+    regulatory_keywords = {
+        'act': 3, 'regulation': 3, 'circular': 3, 'guideline': 3, 'amendment': 3,
+        'notification': 2, 'policy': 2, 'rule': 2, 'framework': 2, 'directive': 2,
+        'insurance': 2, 'aadhaar': 2, 'licensing': 2, 'compliance': 2,
+        'master': 2, 'order': 1, 'announcement': 1, 'update': 1
+    }
     
-    # Create LLM prompt for document relevance filtering
-    relevance_prompt = f"""
-    Given the following user query and AI response, identify the most relevant document links.
-    
-    User Query: {query}
-    
-    AI Response Summary: {ai_response[:500]}...
-    
-    Available Documents:
-    {doc_text}
-    
-    Instructions:
-    1. Select only documents that are directly relevant to the user's query and mentioned concepts in the AI response
-    2. Focus on documents that contain regulations, acts, circulars, guidelines, or policies related to the query topic
-    3. Exclude generic, administrative, or unrelated documents
-    4. Return maximum {max_docs} most relevant documents
-    5. Return only the document numbers (e.g., "1, 3, 5") of the most relevant ones
-    
-    Relevant document numbers (comma-separated):
-    """
-    
-    try:
-        # Get LLM's assessment of document relevance
-        llm_response = llm.invoke(relevance_prompt)
-        relevant_numbers = []
-        
-        # Parse the LLM response to extract document numbers
-        if hasattr(llm_response, 'content'):
-            response_text = llm_response.content
-        else:
-            response_text = str(llm_response)
-        
-        # Extract numbers from the response
-        numbers = re.findall(r'\b\d+\b', response_text)
-        relevant_numbers = [int(num) - 1 for num in numbers if int(num) <= len(filtered_docs)]
-        
-        # Return the relevant documents based on LLM selection
-        relevant_docs = [filtered_docs[i] for i in relevant_numbers[:max_docs] if 0 <= i < len(filtered_docs)]
-        
-        return relevant_docs
-        
-    except Exception as e:
-        st.warning(f"LLM filtering failed, using fallback method: {e}")
-        # Fallback to keyword-based filtering
-        return keyword_based_filter(filtered_docs, query, ai_response, max_docs)
-
-def keyword_based_filter(document_links, query, ai_response, max_docs=3):
-    """
-    Fallback method for document filtering using keyword matching
-    """
-    # Extract key terms from query and response
-    query_terms = set(query.lower().split())
-    response_terms = set(ai_response.lower().split())
-    
-    # Common regulatory keywords
-    regulatory_keywords = {'act', 'regulation', 'circular', 'guideline', 'amendment', 
-                          'notification', 'policy', 'rule', 'framework', 'directive'}
-    
-    all_terms = query_terms.union(response_terms).union(regulatory_keywords)
-    
-    # Score documents based on keyword relevance
+    # Score documents based on multiple factors
     scored_docs = []
-    for doc in document_links:
+    for doc in filtered_docs:
         title_lower = doc['title'].lower()
         score = 0
         
-        # Score based on keyword matches
-        for term in all_terms:
+        # 1. Direct query term matches (highest weight)
+        for term in query_terms:
             if len(term) > 2 and term in title_lower:
+                score += 5
+        
+        # 2. AI response term matches (medium weight)
+        for term in response_terms[:10]:  # Limit to top 10 terms from response
+            if len(term) > 3 and term in title_lower:
+                score += 3
+        
+        # 3. Regulatory keyword matches (variable weight)
+        for keyword, weight in regulatory_keywords.items():
+            if keyword in title_lower:
+                score += weight
+        
+        # 4. Year/date relevance (bonus for recent years)
+        years = re.findall(r'\b(20\d{2})\b', title_lower)
+        if years:
+            latest_year = max(int(year) for year in years)
+            if latest_year >= 2020:
+                score += 2
+            elif latest_year >= 2015:
                 score += 1
         
-        # Bonus for regulatory documents
-        if any(keyword in title_lower for keyword in regulatory_keywords):
-            score += 2
+        # 5. Title length relevance (moderate length preferred)
+        title_length = len(doc['title'])
+        if 20 <= title_length <= 100:
+            score += 1
+        elif title_length > 150:
+            score -= 1
+        
+        # 6. Document type bonus
+        if doc.get('type') == 'content':
+            score += 1
         
         if score > 0:
             scored_docs.append((score, doc))
@@ -124,6 +96,29 @@ def keyword_based_filter(document_links, query, ai_response, max_docs=3):
     # Sort by score and return top documents
     scored_docs.sort(key=lambda x: x[0], reverse=True)
     return [doc for score, doc in scored_docs[:max_docs]]
+
+def extract_key_terms(text):
+    """
+    Extract meaningful terms from text, filtering out common words
+    """
+    # Remove common English stop words
+    stop_words = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
+        'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
+        'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+        'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it',
+        'we', 'they', 'me', 'him', 'her', 'us', 'them', 'what', 'when', 'where', 'why',
+        'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
+        'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very'
+    }
+    
+    # Extract words and filter
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text)
+    meaningful_terms = [word.lower() for word in words if word.lower() not in stop_words]
+    
+    # Return most frequent terms (indicating importance)
+    term_counts = Counter(meaningful_terms)
+    return [term for term, count in term_counts.most_common(20)]
 
 def enhanced_web_scrape(url):
     try:
@@ -448,13 +443,12 @@ if st.button("Get Answer") and query:
                             if link_info not in all_document_links:
                                 all_document_links.append(link_info)
                 
-                # Use LLM-based intelligent filtering for document relevance
-                if all_document_links and st.session_state['llm']:
-                    relevant_docs = filter_relevant_documents_with_llm(
+                # Use optimized keyword-based filtering (no additional LLM call needed)
+                if all_document_links:
+                    relevant_docs = smart_document_filter(
                         all_document_links, 
                         query, 
                         response['answer'], 
-                        st.session_state['llm'],
                         max_docs=3
                     )
                     
