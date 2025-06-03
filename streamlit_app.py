@@ -59,8 +59,10 @@ def extract_document_links(html_content, url):
     
     document_links = []
     
-    document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
+    # Define document extensions to EXCLUDE (we don't want direct downloads)
+    document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar']
     
+    # Get all links
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -69,64 +71,81 @@ def extract_document_links(html_content, url):
         if not href or len(link_text) < 3:
             continue
             
+        # Convert relative URLs to absolute
         if href.startswith('/'):
             href = urljoin(url, href)
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        is_document_link = any(ext in href.lower() for ext in document_extensions)
+        # SKIP direct document downloads
+        is_direct_download = any(ext in href.lower() for ext in document_extensions)
+        if is_direct_download:
+            continue
         
-        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
-                           'notification', 'order', 'policy', 'master', 'framework', 'directive']
-        has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
+        # Look for content page links that likely contain regulatory information
+        content_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
+                           'notification', 'order', 'policy', 'master', 'framework', 'directive',
+                           'press-release', 'news', 'update', 'announcement']
         
-        if is_document_link or has_doc_keywords:
+        has_content_keywords = any(keyword in link_text.lower() for keyword in content_keywords)
+        has_content_keywords_in_url = any(keyword in href.lower() for keyword in content_keywords)
+        
+        # Only include clickable links that lead to content pages
+        if has_content_keywords or has_content_keywords_in_url:
             document_links.append({
                 'title': link_text,
                 'link': href,
-                'type': 'document' if is_document_link else 'content'
+                'type': 'content_page'
             })
     
+    # Extract links from tables (common structure for regulatory websites)
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            if len(cells) >= 3:
-                for cell in cells:
-                    links_in_cell = cell.find_all('a', href=True)
-                    for link in links_in_cell:
-                        href = link.get('href')
-                        link_text = link.get_text(strip=True)
+            for cell in cells:
+                links_in_cell = cell.find_all('a', href=True)
+                for link in links_in_cell:
+                    href = link.get('href')
+                    link_text = link.get_text(strip=True)
+                    
+                    if not href or len(link_text) < 5:
+                        continue
                         
-                        if not href or len(link_text) < 5:
-                            continue
-                            
-                        if href.startswith('/'):
-                            href = urljoin(url, href)
-                        elif not href.startswith(('http://', 'https://')):
-                            href = urljoin(url, href)
-                        
-                        document_patterns = [
-                            r'act.*\d{4}',
-                            r'circular.*\d+',
-                            r'amendment.*act',
-                            r'insurance.*act',
-                            r'guideline',
-                            r'master.*direction',
-                            r'regulation.*\d+'
-                        ]
-                        
-                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        is_document_extension = any(ext in href.lower() for ext in document_extensions)
-                        
-                        if is_likely_document or is_document_extension:
-                            document_links.append({
-                                'title': link_text,
-                                'link': href,
-                                'type': 'document' if is_document_extension else 'reference'
-                            })
+                    # Convert relative URLs to absolute
+                    if href.startswith('/'):
+                        href = urljoin(url, href)
+                    elif not href.startswith(('http://', 'https://')):
+                        href = urljoin(url, href)
+                    
+                    # SKIP direct document downloads
+                    is_direct_download = any(ext in href.lower() for ext in document_extensions)
+                    if is_direct_download:
+                        continue
+                    
+                    # Look for content patterns that suggest regulatory information
+                    content_patterns = [
+                        r'act.*\d{4}',
+                        r'circular.*\d+',
+                        r'amendment.*act',
+                        r'insurance.*act',
+                        r'guideline',
+                        r'master.*direction',
+                        r'regulation.*\d+',
+                        r'rules.*\d{4}'
+                    ]
+                    
+                    is_likely_content = any(re.search(pattern, link_text.lower()) for pattern in content_patterns)
+                    
+                    if is_likely_content:
+                        document_links.append({
+                            'title': link_text,
+                            'link': href,
+                            'type': 'content_page'
+                        })
     
+    # Look for links in content sections
     content_sections = soup.find_all(['div', 'section', 'article'])
     for section in content_sections:
         section_text = section.get_text().lower()
@@ -139,21 +158,29 @@ def extract_document_links(html_content, url):
                 if not href or len(link_text) < 5:
                     continue
                 
+                # Convert relative URLs to absolute
                 if href.startswith('/'):
                     href = urljoin(url, href)
                 elif not href.startswith(('http://', 'https://')):
                     href = urljoin(url, href)
                 
+                # SKIP direct document downloads
+                is_direct_download = any(ext in href.lower() for ext in document_extensions)
+                if is_direct_download:
+                    continue
+                
+                # Only include meaningful content links
                 if len(link_text) > 10 and len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                    content_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
                                        'amendment', 'notification', 'insurance', 'policy']
-                    if any(keyword in link_text.lower() for keyword in document_keywords):
+                    if any(keyword in link_text.lower() for keyword in content_keywords):
                         document_links.append({
                             'title': link_text,
                             'link': href,
-                            'type': 'reference'
+                            'type': 'content_page'
                         })
     
+    # Remove duplicates
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -162,7 +189,8 @@ def extract_document_links(html_content, url):
             seen_links.add(link_key)
             unique_document_links.append(link_info)
     
-    unique_document_links.sort(key=lambda x: (x['type'] != 'document', x['title']))
+    # Sort by title for consistency
+    unique_document_links.sort(key=lambda x: x['title'])
     
     return unique_document_links
 
@@ -174,6 +202,7 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
+    # Look for news/updates sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -185,8 +214,10 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
+    # Extract only clickable content links (no direct downloads)
     content_sections['document_links'] = extract_document_links(html_content, url)
     
+    # Extract main text content
     main_text = soup.get_text()
     
     lines = (line.strip() for line in main_text.splitlines())
@@ -218,23 +249,17 @@ def load_hardcoded_websites():
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
                 if sections.get('document_links'):
-                    with st.expander(f"Document Links found from {url}"):
-                        st.write(f"**Total documents found:** {len(sections['document_links'])}")
+                    with st.expander(f"Content Links found from {url}"):
+                        st.write(f"**Total content pages found:** {len(sections['document_links'])}")
                         
-                        pdf_docs = [link for link in sections['document_links'] if link['type'] == 'document']
-                        ref_docs = [link for link in sections['document_links'] if link['type'] in ['reference', 'content']]
+                        content_links = sections['document_links']
                         
-                        if pdf_docs:
-                            st.write("**Direct Document Downloads:**")
-                            for i, link_info in enumerate(pdf_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        
-                        if ref_docs:
-                            st.write("**Document References:**")
-                            for i, link_info in enumerate(ref_docs[:10]):
+                        if content_links:
+                            st.write("**Clickable Content Pages:**")
+                            for i, link_info in enumerate(content_links[:15]):  # Show more since they're all content links
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
-                    st.write(f"No document links found from {url}")
+                    st.write(f"No content links found from {url}")
             
             st.success(f"Successfully loaded content from {url}")
             
@@ -244,7 +269,6 @@ def load_hardcoded_websites():
     return loaded_docs
 
 def is_fallback_response(response_text):
-
     fallback_phrases = [
         "fall outside the scope of the data I've been trained on",
         "details you've asked for fall outside the scope",
@@ -254,6 +278,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -289,7 +314,7 @@ if not st.session_state['docs_loaded']:
                     - Look for press releases, circulars, guidelines, and policy updates
                     - Provide specific details about new regulations, policy changes, or announcements
                     - If you find dated information, mention the specific dates
-                    - When mentioning any acts, circulars, or regulations, try to reference the available document links
+                    - When mentioning any acts, circulars, or regulations, try to reference the available content page links
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                     
@@ -299,7 +324,7 @@ if not st.session_state['docs_loaded']:
                     
                     Question: {input}
                     
-                    Answer with specific details, dates, and references where available. If relevant documents are mentioned, note that direct links may be available in the sources section.
+                    Answer with specific details, dates, and references where available. If relevant content pages are mentioned, note that direct links may be available in the sources section.
                     """
                 )
                 
@@ -335,18 +360,18 @@ if st.button("Get Answer") and query:
             if not is_fallback_response(response['answer']):
                 retrieved_docs = response.get('context', [])
                 
-                all_document_links = []
+                all_content_links = []
                 for doc in retrieved_docs:
                     if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
                         for link_info in doc.metadata['sections']['document_links']:
-                            if link_info not in all_document_links:
-                                all_document_links.append(link_info)
+                            if link_info not in all_content_links:
+                                all_content_links.append(link_info)
                 
-                relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
+                relevant_links = get_relevant_documents(all_content_links, query, response['answer']) if all_content_links else []
                 
-                if relevant_docs:
-                    st.write("\n**📄 Related Documents:**")
-                    for i, link_info in enumerate(relevant_docs[:3]):
+                if relevant_links:
+                    st.write("\n**🔗 Related Content Pages:**")
+                    for i, link_info in enumerate(relevant_links[:5]):  # Show more content links
                         st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 
                 st.write("\n**📍 Information Sources:**")
@@ -358,6 +383,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+                st.info("ℹ️ No specific content pages or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
