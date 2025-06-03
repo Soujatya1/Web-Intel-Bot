@@ -14,7 +14,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules.html"
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules"
                      ]
 
 def get_relevant_documents(document_links, query, ai_response, max_docs=3):
