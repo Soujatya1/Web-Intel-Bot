@@ -12,114 +12,53 @@ from bs4 import BeautifulSoup
 import time
 import re
 from urllib.parse import urljoin, urlparse
-from collections import defaultdict
-
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework"
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa",
+                      "https://egazette.gov.in/(S(sd0qkpzzyfknsslr0r1bhkhz))/Default.aspx"
                      ]
 
-def get_documents_from_context_chunks(retrieved_docs, query, ai_response, max_docs=3):
+def get_relevant_documents(document_links, query, ai_response, max_docs=3):
     
-    relevant_document_links = []
+    if not document_links:
+        return []
     
-    for doc in retrieved_docs:
-        doc_metadata = doc.metadata
-        doc_content = doc.page_content
-        
-        if 'sections' in doc_metadata and 'document_links' in doc_metadata['sections']:
-            chunk_doc_links = doc_metadata['sections']['document_links']
-            
-            for link_info in chunk_doc_links:
-                # Filter out PDF and other direct download links
-                if not is_direct_download_link(link_info['link']):
-                    enhanced_link = {
-                        'title': link_info['title'],
-                        'link': link_info['link'],
-                        'type': link_info['type'],
-                        'source_chunk': doc_content[:500] + "..." if len(doc_content) > 500 else doc_content,
-                        'source_url': doc_metadata.get('source', ''),
-                        'relevance_context': doc_content
-                    }
-                    relevant_document_links.append(enhanced_link)
+    filtered_docs = []
+    for doc_link in document_links:
+        title = doc_link.get('title', '').strip()
+        if len(title) > 10 and title.lower() not in ['click here', 'read more', 'download']:
+            filtered_docs.append(doc_link)
     
-    seen_links = set()
-    unique_links = []
-    for link in relevant_document_links:
-        if link['link'] not in seen_links:
-            seen_links.add(link['link'])
-            unique_links.append(link)
-    
-    scored_links = []
-    for link in unique_links:
-        score = calculate_context_relevance_score(link, query, ai_response)
-        if score > 0:
-            scored_links.append((link, score))
-    
-    scored_links.sort(key=lambda x: x[1], reverse=True)
-    
-    # Only return redirectable links (no document type filtering)
-    result_links = []
-    for link, score in scored_links[:max_docs]:
-        result_links.append(link)
-    
-    return result_links
-
-def calculate_context_relevance_score(link_info, query, ai_response):
-    
-    score = 0
-    
-    context_text = link_info['relevance_context'].lower()
-    link_title = link_info['title'].lower()
-    query_lower = query.lower()
-    response_lower = ai_response.lower()
-    
-    if link_info['type'] == 'document':
-        score += 15
-    
-    query_words = [word for word in query_lower.split() if len(word) > 3]
-    for word in query_words:
-        if word in context_text:
-            score += 8
-            if word in link_title:
-                score += 5
-    
-    response_words = [word for word in response_lower.split() if len(word) > 4]
-    common_words = set(['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'])
-    response_words = [word for word in response_words if word not in common_words]
-    
-    context_response_matches = 0
-    for word in response_words[:20]:
-        if word in context_text:
-            context_response_matches += 1
-    
-    if len(response_words) > 0:
-        match_ratio = context_response_matches / len(response_words)
-        score += int(match_ratio * 20)
-    
-    regulatory_patterns = [
-        r'act.*\d{4}', r'circular.*\d+', r'amendment.*act', r'insurance.*act',
-        r'guideline', r'master.*direction', r'regulation.*\d+', r'notification.*\d+'
-    ]
-    
-    for pattern in regulatory_patterns:
-        if re.search(pattern, link_title):
-            score += 10
-            break
-    
-    years_in_query = re.findall(r'\b(20\d{2})\b', query_lower)
-    years_in_response = re.findall(r'\b(20\d{2})\b', response_lower)
-    years_in_title = re.findall(r'\b(20\d{2})\b', link_title)
-    
-    for year in set(years_in_query + years_in_response):
-        if year in years_in_title:
-            score += 12
-    
-    poor_titles = ['click here', 'read more', 'download', 'view', 'see more', 'link']
-    if any(poor_title in link_title for poor_title in poor_titles) or len(link_info['title'].strip()) < 10:
-        score -= 10
-    
-    return max(0, score)
+    return filtered_docs[:max_docs]
 
 def enhanced_web_scrape(url):
     try:
@@ -142,14 +81,14 @@ def enhanced_web_scrape(url):
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
-def extract_document_links_with_context(html_content, url):
-
+def extract_document_links(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
     
     for script in soup(["script", "style"]):
         script.decompose()
     
     document_links = []
+    
     document_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx']
     
     all_links = soup.find_all('a', href=True)
@@ -165,13 +104,6 @@ def extract_document_links_with_context(html_content, url):
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        context_text = ""
-        parent = link.parent
-        if parent:
-            context_text = parent.get_text(strip=True)
-            if len(context_text) < 50 and parent.parent:
-                context_text = parent.parent.get_text(strip=True)
-        
         is_document_link = any(ext in href.lower() for ext in document_extensions)
         
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
@@ -182,52 +114,74 @@ def extract_document_links_with_context(html_content, url):
             document_links.append({
                 'title': link_text,
                 'link': href,
-                'type': 'document' if is_document_link else 'content',
-                'context': context_text[:300]
+                'type': 'document' if is_document_link else 'content'
             })
     
     tables = soup.find_all('table')
     for table in tables:
-        table_context = ""
-        prev_sibling = table.find_previous_sibling(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
-        if prev_sibling:
-            table_context = prev_sibling.get_text(strip=True)
-        
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            row_text = ' '.join(cell.get_text(strip=True) for cell in cells)
-            
-            for cell in cells:
-                links_in_cell = cell.find_all('a', href=True)
-                for link in links_in_cell:
-                    href = link.get('href')
-                    link_text = link.get_text(strip=True)
-                    
-                    if not href or len(link_text) < 5:
-                        continue
+            if len(cells) >= 3:
+                for cell in cells:
+                    links_in_cell = cell.find_all('a', href=True)
+                    for link in links_in_cell:
+                        href = link.get('href')
+                        link_text = link.get_text(strip=True)
                         
-                    if href.startswith('/'):
-                        href = urljoin(url, href)
-                    elif not href.startswith(('http://', 'https://')):
-                        href = urljoin(url, href)
-                    
-                    combined_context = f"{table_context} {row_text}".strip()
-                    
-                    document_patterns = [
-                        r'act.*\d{4}', r'circular.*\d+', r'amendment.*act', r'insurance.*act',
-                        r'guideline', r'master.*direction', r'regulation.*\d+'
-                    ]
-                    
-                    is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                    is_document_extension = any(ext in href.lower() for ext in document_extensions)
-                    
-                    if is_likely_document or is_document_extension:
+                        if not href or len(link_text) < 5:
+                            continue
+                            
+                        if href.startswith('/'):
+                            href = urljoin(url, href)
+                        elif not href.startswith(('http://', 'https://')):
+                            href = urljoin(url, href)
+                        
+                        document_patterns = [
+                            r'act.*\d{4}',
+                            r'circular.*\d+',
+                            r'amendment.*act',
+                            r'insurance.*act',
+                            r'guideline',
+                            r'master.*direction',
+                            r'regulation.*\d+'
+                        ]
+                        
+                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
+                        is_document_extension = any(ext in href.lower() for ext in document_extensions)
+                        
+                        if is_likely_document or is_document_extension:
+                            document_links.append({
+                                'title': link_text,
+                                'link': href,
+                                'type': 'document' if is_document_extension else 'reference'
+                            })
+    
+    content_sections = soup.find_all(['div', 'section', 'article'])
+    for section in content_sections:
+        section_text = section.get_text().lower()
+        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
+            links_in_section = section.find_all('a', href=True)
+            for link in links_in_section:
+                href = link.get('href')
+                link_text = link.get_text(strip=True)
+                
+                if not href or len(link_text) < 5:
+                    continue
+                
+                if href.startswith('/'):
+                    href = urljoin(url, href)
+                elif not href.startswith(('http://', 'https://')):
+                    href = urljoin(url, href)
+                
+                if len(link_text) > 10 and len(link_text) < 200:
+                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                                       'amendment', 'notification', 'insurance', 'policy']
+                    if any(keyword in link_text.lower() for keyword in document_keywords):
                         document_links.append({
                             'title': link_text,
                             'link': href,
-                            'type': 'document' if is_document_extension else 'reference',
-                            'context': combined_context[:300]
+                            'type': 'reference'
                         })
     
     seen_links = set()
@@ -237,6 +191,8 @@ def extract_document_links_with_context(html_content, url):
         if link_key not in seen_links:
             seen_links.add(link_key)
             unique_document_links.append(link_info)
+    
+    unique_document_links.sort(key=lambda x: (x['type'] != 'document', x['title']))
     
     return unique_document_links
 
@@ -259,9 +215,10 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
-    content_sections['document_links'] = extract_document_links_with_context(html_content, url)
+    content_sections['document_links'] = extract_document_links(html_content, url)
     
     main_text = soup.get_text()
+    
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
@@ -317,6 +274,7 @@ def load_hardcoded_websites():
     return loaded_docs
 
 def is_fallback_response(response_text):
+
     fallback_phrases = [
         "fall outside the scope of the data I've been trained on",
         "details you've asked for fall outside the scope",
@@ -337,7 +295,7 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
@@ -361,7 +319,7 @@ if not st.session_state['docs_loaded']:
                     - Look for press releases, circulars, guidelines, and policy updates
                     - Provide specific details about new regulations, policy changes, or announcements
                     - If you find dated information, mention the specific dates
-                    - When mentioning any acts, circulars, or regulations
+                    - When mentioning any acts, circulars, or regulations, try to reference the available document links
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                     
@@ -371,7 +329,7 @@ if not st.session_state['docs_loaded']:
                     
                     Question: {input}
                     
-                    Answer with specific details, dates. If relevant documents are mentioned, note that direct links may be available in the sources section.
+                    Answer with specific details, dates, and references where available. If relevant documents are mentioned, note that direct links may be available in the sources section.
                     """
                 )
                 
@@ -407,30 +365,21 @@ if st.button("Get Answer") and query:
             if not is_fallback_response(response['answer']):
                 retrieved_docs = response.get('context', [])
                 
-                relevant_docs = get_documents_from_context_chunks(
-                    retrieved_docs, query, response['answer'], max_docs=3
-                )
+                all_document_links = []
+                for doc in retrieved_docs:
+                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
+                        for link_info in doc.metadata['sections']['document_links']:
+                            if link_info not in all_document_links:
+                                all_document_links.append(link_info)
+                
+                relevant_docs = get_relevant_documents(all_document_links, query, response['answer']) if all_document_links else []
                 
                 if relevant_docs:
-                    st.write("\n**Related Documents (from answer context):**")
-                    
-                    doc_files = [doc for doc in relevant_docs if doc['type'] == 'document']
-                    ref_files = [doc for doc in relevant_docs if doc['type'] in ['reference', 'content']]
-                    
-                    if doc_files:
-                        st.write("**Direct Document Downloads:**")
-                        for i, link_info in enumerate(doc_files, 1):
-                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
-                            
-                    
-                    if ref_files:
-                        st.write("**Related References:**")
-                        for i, link_info in enumerate(ref_files, 1):
-                            st.write(f"{i}. [{link_info['title']}]({link_info['link']})")
-                else:
-                    st.info("No specific documents found in the context used for this answer.")
+                    st.write("\n**📄 Related Documents:**")
+                    for i, link_info in enumerate(relevant_docs[:3]):
+                        st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 
-                st.write("\n**Information Sources:**")
+                st.write("\n**📍 Information Sources:**")
                 sources = set()
                 for doc in retrieved_docs:
                     source = doc.metadata.get('source', 'Unknown')
@@ -439,6 +388,6 @@ if st.button("Get Answer") and query:
                 for i, source in enumerate(sources, 1):
                     st.write(f"{i}. [{source}]({source})")
             else:
-                st.info("ℹNo specific documents or sources are available for this query as it falls outside the current data scope.")
+                st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
