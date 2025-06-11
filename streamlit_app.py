@@ -372,7 +372,7 @@ if not st.session_state['docs_loaded']:
         
         if api_key and st.session_state['loaded_docs']:
             with st.spinner("Processing documents..."):
-                llm = ChatGroq(groq_api_key=api_key, model_name='llama3-70b-8192', temperature=0.2, top_p=0.2)
+                llm = ChatGroq(groq_api_key=api_key, model_name='meta-llama/llama-4-scout-17b-16e-instruct', temperature=0.2, top_p=0.2)
                 st.session_state['llm'] = llm
                 
                 hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
