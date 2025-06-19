@@ -362,7 +362,7 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-api_key = "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"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
@@ -389,6 +389,7 @@ if not st.session_state['docs_loaded']:
                     - Provide specific details about new regulations, policy changes, or announcements
                     - If you find dated information, mention the specific dates
                     - When mentioning any acts, circulars, or regulations, try to reference the available document links
+                    - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address) state that information is not available, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
                     
                     Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                     
