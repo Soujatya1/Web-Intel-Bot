@@ -20,39 +20,30 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                      ]
 
 def smart_document_filter(document_links, query, ai_response, max_docs=3):
-    """
-    Filter links based on 100% confidence match with LLM generated answer
-    Only returns links that are explicitly mentioned or highly relevant to the AI response
-    """
+
     if not document_links:
         return []
     
-    # Clean and normalize AI response for better matching
     ai_response_lower = ai_response.lower()
     ai_response_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', ai_response_lower))
     
-    # Extract specific terms, acts, and regulations mentioned in AI response
     mentioned_acts = re.findall(r'\b[\w\s]*act[\w\s]*\b', ai_response_lower)
     mentioned_regulations = re.findall(r'\b[\w\s]*regulation[\w\s]*\b', ai_response_lower)
     mentioned_circulars = re.findall(r'\b[\w\s]*circular[\w\s]*\b', ai_response_lower)
     mentioned_guidelines = re.findall(r'\b[\w\s]*guideline[\w\s]*\b', ai_response_lower)
     mentioned_amendments = re.findall(r'\b[\w\s]*amendment[\w\s]*\b', ai_response_lower)
     
-    # Combine all specific mentions
     specific_mentions = (mentioned_acts + mentioned_regulations + mentioned_circulars + 
                         mentioned_guidelines + mentioned_amendments)
     
-    # Extract years mentioned in AI response
     mentioned_years = set(re.findall(r'\b(20\d{2})\b', ai_response))
     
-    # Filter links with 100% confidence based on AI response
     high_confidence_docs = []
     
     for doc in document_links:
         title = doc.get('title', '').strip()
         title_lower = title.lower()
         
-        # Skip obviously irrelevant links
         if (len(title) < 10 or 
             title.lower() in ['click here', 'read more', 'download', 'view more', 'see all'] or
             any(skip_word in title.lower() for skip_word in ['home', 'contact', 'about us', 'sitemap'])):
@@ -61,46 +52,39 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
         confidence_score = 0
         match_reasons = []
         
-        # 1. Check for exact phrase matches from AI response (highest confidence)
         for mention in specific_mentions:
             mention_clean = mention.strip()
             if len(mention_clean) > 5 and mention_clean in title_lower:
                 confidence_score += 50
                 match_reasons.append(f"Exact mention: '{mention_clean}'")
         
-        # 2. Check for multiple key terms from AI response appearing in title
         title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
         common_words = ai_response_words.intersection(title_words)
         
-        # Remove common stop words from intersection
         stop_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'doe', 'end', 'few', 'got', 'let', 'man', 'new', 'put', 'say', 'she', 'too', 'use'}
         meaningful_common_words = common_words - stop_words
         
-        if len(meaningful_common_words) >= 3:  # At least 3 meaningful words match
+        if len(meaningful_common_words) >= 3:
             confidence_score += 30
             match_reasons.append(f"Multiple key terms: {list(meaningful_common_words)[:3]}")
         
-        # 3. Check for year matches (if AI response mentions specific years)
         if mentioned_years:
             title_years = set(re.findall(r'\b(20\d{2})\b', title))
             if mentioned_years.intersection(title_years):
                 confidence_score += 20
                 match_reasons.append(f"Year match: {mentioned_years.intersection(title_years)}")
         
-        # 4. Check for regulatory document type mentioned in AI response
         regulatory_types = ['act', 'regulation', 'circular', 'guideline', 'amendment', 'notification', 'policy', 'rule', 'framework', 'directive']
         ai_mentions_reg_type = any(reg_type in ai_response_lower for reg_type in regulatory_types)
         title_has_reg_type = any(reg_type in title_lower for reg_type in regulatory_types)
         
         if ai_mentions_reg_type and title_has_reg_type:
-            # Find which specific regulatory types match
             matching_reg_types = [reg_type for reg_type in regulatory_types 
                                 if reg_type in ai_response_lower and reg_type in title_lower]
             if matching_reg_types:
                 confidence_score += 25
                 match_reasons.append(f"Regulatory type match: {matching_reg_types}")
         
-        # 5. Check for domain-specific terms (insurance, aadhaar, etc.) mentioned in AI response
         domain_terms = ['insurance', 'aadhaar', 'uidai', 'irdai', 'pmla', 'licensing', 'compliance']
         ai_domain_terms = [term for term in domain_terms if term in ai_response_lower]
         title_domain_terms = [term for term in domain_terms if term in title_lower]
@@ -110,7 +94,6 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
             confidence_score += 20
             match_reasons.append(f"Domain terms: {list(matching_domain_terms)}")
         
-        # Only include documents with high confidence (score >= 50 indicates strong relevance to AI response)
         if confidence_score >= 50:
             high_confidence_docs.append({
                 'doc': doc,
@@ -118,17 +101,11 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
                 'reasons': match_reasons
             })
     
-    # Sort by confidence score (highest first) and return top documents
     high_confidence_docs.sort(key=lambda x: x['score'], reverse=True)
     
-    # Return only the document info (without scores/reasons for display)
     return [item['doc'] for item in high_confidence_docs[:max_docs]]
 
 def extract_key_terms(text):
-    """
-    Extract meaningful terms from text, filtering out common words
-    """
-    # Remove common English stop words
     stop_words = {
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
         'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
@@ -139,11 +116,9 @@ def extract_key_terms(text):
         'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very'
     }
     
-    # Extract words and filter
     words = re.findall(r'\b[a-zA-Z]{3,}\b', text)
     meaningful_terms = [word.lower() for word in words if word.lower() not in stop_words]
     
-    # Return most frequent terms (indicating importance)
     term_counts = Counter(meaningful_terms)
     return [term for term, count in term_counts.most_common(20)]
 
@@ -176,7 +151,6 @@ def extract_document_links(html_content, url):
     
     document_links = []
     
-    # Focus on clickable content links, not just file downloads
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -190,14 +164,12 @@ def extract_document_links(html_content, url):
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        # Focus on content pages rather than file downloads
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
                            'notification', 'order', 'policy', 'master', 'framework', 'directive',
                            'insurance', 'aadhaar', 'compliance', 'licensing']
         
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
-        # Include content links, not just PDF downloads
         if has_doc_keywords and len(link_text) > 5:
             document_links.append({
                 'title': link_text,
@@ -205,7 +177,6 @@ def extract_document_links(html_content, url):
                 'type': 'content'
             })
     
-    # Extract from tables (common structure for regulatory websites)
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
@@ -246,7 +217,6 @@ def extract_document_links(html_content, url):
                                 'type': 'reference'
                             })
     
-    # Extract from content sections
     content_sections = soup.find_all(['div', 'section', 'article'])
     for section in content_sections:
         section_text = section.get_text().lower()
@@ -274,7 +244,6 @@ def extract_document_links(html_content, url):
                             'type': 'reference'
                         })
     
-    # Remove duplicates
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -283,7 +252,6 @@ def extract_document_links(html_content, url):
             seen_links.add(link_key)
             unique_document_links.append(link_info)
     
-    # Sort by relevance (content type first, then alphabetically)
     unique_document_links.sort(key=lambda x: (x['type'] != 'content', x['title']))
     
     return unique_document_links
@@ -296,7 +264,6 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
-    # Extract news/updates sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -310,7 +277,6 @@ def extract_structured_content(html_content, url):
     
     content_sections['document_links'] = extract_document_links(html_content, url)
     
-    # Extract main text content
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
@@ -376,7 +342,6 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
-# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -390,7 +355,6 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-# API Key Input Section
 st.subheader("Configuration")
 api_key = st.text_input(
     "Enter your Groq API Key:", 
@@ -399,7 +363,6 @@ api_key = st.text_input(
     help="You can get your API key from https://console.groq.com/"
 )
 
-# Validate API key format (basic validation)
 if api_key and not api_key.startswith("gsk_"):
     st.warning("⚠️ Groq API keys typically start with 'gsk_'. Please verify your API key.")
 
@@ -485,7 +448,6 @@ if st.button("Get Answer", disabled=not api_key) and query:
                 if not is_fallback_response(response['answer']):
                     retrieved_docs = response.get('context', [])
                     
-                    # Collect all document links from retrieved documents
                     all_document_links = []
                     for doc in retrieved_docs:
                         if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
@@ -493,7 +455,6 @@ if st.button("Get Answer", disabled=not api_key) and query:
                                 if link_info not in all_document_links:
                                     all_document_links.append(link_info)
                     
-                    # Use AI-response-only filtering for 100% confidence links
                     if all_document_links:
                         relevant_docs = smart_document_filter(
                             all_document_links, 
