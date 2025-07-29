@@ -14,7 +14,10 @@ import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts"
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://uidai.gov.in/",
+                      "https://egazette.gov.in/(S(0jxofhxoqjkp2ketyk3mpx3h))/default.aspx#"
                      ]
 
 def smart_document_filter(document_links, query, ai_response, max_docs=3):
