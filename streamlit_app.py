@@ -17,7 +17,6 @@ from collections import Counter
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://enforcementdirectorate.gov.in/pmla",
                       "https://uidai.gov.in/en/about-uidai/legal-framework",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/notification",
                       "https://egazette.gov.in/(S(0jxofhxoqjkp2ketyk3mpx3h))/default.aspx#"
                      ]
 
