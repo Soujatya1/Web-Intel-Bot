@@ -14,91 +14,117 @@ import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+HARDCODED_WEBSITES = ["https://uidai.gov.in/en/about-uidai/legal-framework",
                       "https://enforcementdirectorate.gov.in/pmla",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/notification",
-                      "https://egazette.gov.in/(S(0jxofhxoqjkp2ketyk3mpx3h))/default.aspx#"
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notification",
+                      "https://egazette.gov.in/(S(0jxofhxoqjkp2ketyk3mpx3h))/default.aspx#"
                      ]
 
 def smart_document_filter(document_links, query, ai_response, max_docs=3):
     """
-    Intelligent document filtering using enhanced keyword matching and relevance scoring
+    Filter links based on 100% confidence match with LLM generated answer
+    Only returns links that are explicitly mentioned or highly relevant to the AI response
     """
     if not document_links:
         return []
     
-    # First, basic filtering to remove obviously irrelevant links
-    filtered_docs = []
-    for doc_link in document_links:
-        title = doc_link.get('title', '').strip()
-        if (len(title) > 10 and 
-            title.lower() not in ['click here', 'read more', 'download', 'view more', 'see all'] and
-            not any(skip_word in title.lower() for skip_word in ['home', 'contact', 'about us', 'sitemap'])):
-            filtered_docs.append(doc_link)
+    # Clean and normalize AI response for better matching
+    ai_response_lower = ai_response.lower()
+    ai_response_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', ai_response_lower))
     
-    if not filtered_docs:
-        return []
+    # Extract specific terms, acts, and regulations mentioned in AI response
+    mentioned_acts = re.findall(r'\b[\w\s]*act[\w\s]*\b', ai_response_lower)
+    mentioned_regulations = re.findall(r'\b[\w\s]*regulation[\w\s]*\b', ai_response_lower)
+    mentioned_circulars = re.findall(r'\b[\w\s]*circular[\w\s]*\b', ai_response_lower)
+    mentioned_guidelines = re.findall(r'\b[\w\s]*guideline[\w\s]*\b', ai_response_lower)
+    mentioned_amendments = re.findall(r'\b[\w\s]*amendment[\w\s]*\b', ai_response_lower)
     
-    # Extract key terms from query and AI response
-    query_terms = extract_key_terms(query.lower())
-    response_terms = extract_key_terms(ai_response.lower())
+    # Combine all specific mentions
+    specific_mentions = (mentioned_acts + mentioned_regulations + mentioned_circulars + 
+                        mentioned_guidelines + mentioned_amendments)
     
-    # Define domain-specific keywords with weights
-    regulatory_keywords = {
-        'act': 3, 'regulation': 3, 'circular': 3, 'guideline': 3, 'amendment': 3,
-        'notification': 2, 'policy': 2, 'rule': 2, 'framework': 2, 'directive': 2,
-        'insurance': 2, 'aadhaar': 2, 'licensing': 2, 'compliance': 2,
-        'master': 2, 'order': 1, 'announcement': 1, 'update': 1
-    }
+    # Extract years mentioned in AI response
+    mentioned_years = set(re.findall(r'\b(20\d{2})\b', ai_response))
     
-    # Score documents based on multiple factors
-    scored_docs = []
-    for doc in filtered_docs:
-        title_lower = doc['title'].lower()
-        score = 0
-        
-        # 1. Direct query term matches (highest weight)
-        for term in query_terms:
-            if len(term) > 2 and term in title_lower:
-                score += 5
-        
-        # 2. AI response term matches (medium weight)
-        for term in response_terms[:10]:  # Limit to top 10 terms from response
-            if len(term) > 3 and term in title_lower:
-                score += 3
-        
-        # 3. Regulatory keyword matches (variable weight)
-        for keyword, weight in regulatory_keywords.items():
-            if keyword in title_lower:
-                score += weight
-        
-        # 4. Year/date relevance (bonus for recent years)
-        years = re.findall(r'\b(20\d{2})\b', title_lower)
-        if years:
-            latest_year = max(int(year) for year in years)
-            if latest_year >= 2020:
-                score += 2
-            elif latest_year >= 2015:
-                score += 1
-        
-        # 5. Title length relevance (moderate length preferred)
-        title_length = len(doc['title'])
-        if 20 <= title_length <= 100:
-            score += 1
-        elif title_length > 150:
-            score -= 1
-        
-        # 6. Document type bonus
-        if doc.get('type') == 'content':
-            score += 1
-        
-        if score > 0:
-            scored_docs.append((score, doc))
+    # Filter links with 100% confidence based on AI response
+    high_confidence_docs = []
     
-    # Sort by score and return top documents
-    scored_docs.sort(key=lambda x: x[0], reverse=True)
-    return [doc for score, doc in scored_docs[:max_docs]]
+    for doc in document_links:
+        title = doc.get('title', '').strip()
+        title_lower = title.lower()
+        
+        # Skip obviously irrelevant links
+        if (len(title) < 10 or 
+            title.lower() in ['click here', 'read more', 'download', 'view more', 'see all'] or
+            any(skip_word in title.lower() for skip_word in ['home', 'contact', 'about us', 'sitemap'])):
+            continue
+        
+        confidence_score = 0
+        match_reasons = []
+        
+        # 1. Check for exact phrase matches from AI response (highest confidence)
+        for mention in specific_mentions:
+            mention_clean = mention.strip()
+            if len(mention_clean) > 5 and mention_clean in title_lower:
+                confidence_score += 50
+                match_reasons.append(f"Exact mention: '{mention_clean}'")
+        
+        # 2. Check for multiple key terms from AI response appearing in title
+        title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
+        common_words = ai_response_words.intersection(title_words)
+        
+        # Remove common stop words from intersection
+        stop_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'doe', 'end', 'few', 'got', 'let', 'man', 'new', 'put', 'say', 'she', 'too', 'use'}
+        meaningful_common_words = common_words - stop_words
+        
+        if len(meaningful_common_words) >= 3:  # At least 3 meaningful words match
+            confidence_score += 30
+            match_reasons.append(f"Multiple key terms: {list(meaningful_common_words)[:3]}")
+        
+        # 3. Check for year matches (if AI response mentions specific years)
+        if mentioned_years:
+            title_years = set(re.findall(r'\b(20\d{2})\b', title))
+            if mentioned_years.intersection(title_years):
+                confidence_score += 20
+                match_reasons.append(f"Year match: {mentioned_years.intersection(title_years)}")
+        
+        # 4. Check for regulatory document type mentioned in AI response
+        regulatory_types = ['act', 'regulation', 'circular', 'guideline', 'amendment', 'notification', 'policy', 'rule', 'framework', 'directive']
+        ai_mentions_reg_type = any(reg_type in ai_response_lower for reg_type in regulatory_types)
+        title_has_reg_type = any(reg_type in title_lower for reg_type in regulatory_types)
+        
+        if ai_mentions_reg_type and title_has_reg_type:
+            # Find which specific regulatory types match
+            matching_reg_types = [reg_type for reg_type in regulatory_types 
+                                if reg_type in ai_response_lower and reg_type in title_lower]
+            if matching_reg_types:
+                confidence_score += 25
+                match_reasons.append(f"Regulatory type match: {matching_reg_types}")
+        
+        # 5. Check for domain-specific terms (insurance, aadhaar, etc.) mentioned in AI response
+        domain_terms = ['insurance', 'aadhaar', 'uidai', 'irdai', 'pmla', 'licensing', 'compliance']
+        ai_domain_terms = [term for term in domain_terms if term in ai_response_lower]
+        title_domain_terms = [term for term in domain_terms if term in title_lower]
+        
+        matching_domain_terms = set(ai_domain_terms).intersection(set(title_domain_terms))
+        if matching_domain_terms:
+            confidence_score += 20
+            match_reasons.append(f"Domain terms: {list(matching_domain_terms)}")
+        
+        # Only include documents with high confidence (score >= 50 indicates strong relevance to AI response)
+        if confidence_score >= 50:
+            high_confidence_docs.append({
+                'doc': doc,
+                'score': confidence_score,
+                'reasons': match_reasons
+            })
+    
+    # Sort by confidence score (highest first) and return top documents
+    high_confidence_docs.sort(key=lambda x: x['score'], reverse=True)
+    
+    # Return only the document info (without scores/reasons for display)
+    return [item['doc'] for item in high_confidence_docs[:max_docs]]
 
 def extract_key_terms(text):
     """
@@ -469,7 +495,7 @@ if st.button("Get Answer", disabled=not api_key) and query:
                                 if link_info not in all_document_links:
                                     all_document_links.append(link_info)
                     
-                    # Use optimized keyword-based filtering (no additional LLM call needed)
+                    # Use AI-response-only filtering for 100% confidence links
                     if all_document_links:
                         relevant_docs = smart_document_filter(
                             all_document_links, 
@@ -479,11 +505,11 @@ if st.button("Get Answer", disabled=not api_key) and query:
                         )
                         
                         if relevant_docs:
-                            st.write("\n**📄 Most Relevant Documents:**")
+                            st.write("\n**📄 High Confidence Documents (Based on AI Response):**")
                             for i, link_info in enumerate(relevant_docs):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         else:
-                            st.info("No highly relevant document links found for this specific query.")
+                            st.info("No high-confidence document links found that directly match the AI response content.")
                     
                     st.write("\n**📍 Information Sources:**")
                     sources = set()
