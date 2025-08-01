@@ -392,6 +392,7 @@ if not st.session_state['docs_loaded']:
                             - Look for press releases, circulars, guidelines, and policy updates
                             - Provide specific details about new regulations, policy changes, or announcements
                             - If you find dated information, mention the specific dates
+                            - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
                             - When mentioning any acts, circulars, or regulations, try to reference the available document links
                             - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address) state that information is not available, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
                             
