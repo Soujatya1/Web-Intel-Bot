@@ -462,7 +462,7 @@ if st.button("Get Answer", disabled=not api_key) and query:
                         )
                         
                         if relevant_docs:
-                            st.write("\n**📄 High Confidence Documents (Based on AI Response):**")
+                            st.write("\n**📄 Relevant Document Links**")
                             for i, link_info in enumerate(relevant_docs):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         else:
