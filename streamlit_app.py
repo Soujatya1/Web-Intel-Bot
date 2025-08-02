@@ -13,12 +13,160 @@ import time
 import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
+from datetime import datetime
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/guidelines"
-                     ]
+HARDCODED_WEBSITES = ["https://irdai.gov.in/guidelines"]
+
+def extract_dates_from_text(text):
+    """Extract dates from text using multiple patterns"""
+    date_patterns = [
+        r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b',  # DD/MM/YYYY or DD-MM-YYYY
+        r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b',  # YYYY/MM/DD or YYYY-MM-DD
+        r'\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b',  # DD Month YYYY
+        r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})\b',  # Month DD, YYYY
+        r'\b(202[0-9])\b'  # Years 2020-2029
+    ]
+    
+    dates_found = []
+    
+    for pattern in date_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            try:
+                groups = match.groups()
+                if len(groups) == 1:  # Just year
+                    year = int(groups[0])
+                    if 2020 <= year <= 2030:  # Reasonable year range
+                        dates_found.append((year, 1, 1))  # Default to Jan 1
+                else:
+                    # Try to parse the date
+                    date_str = match.group()
+                    parsed_date = extract_date_components(date_str)
+                    if parsed_date:
+                        dates_found.append(parsed_date)
+            except:
+                continue
+    
+    return dates_found
+
+def extract_date_components(date_str):
+    """Extract year, month, day from date string"""
+    # Look for year first
+    year_match = re.search(r'\b(202[0-9])\b', date_str)
+    if year_match:
+        year = int(year_match.group(1))
+        
+        # Look for month
+        month = 1
+        month_match = re.search(r'\b(\d{1,2})[/-]', date_str)
+        if month_match:
+            month = min(12, max(1, int(month_match.group(1))))
+        
+        # Look for day
+        day = 1
+        day_match = re.search(r'[/-](\d{1,2})\b', date_str)
+        if day_match:
+            day = min(31, max(1, int(day_match.group(1))))
+        
+        return (year, month, day)
+    return None
+
+def create_date_aware_retriever(vector_db, query, k=10):
+    """Custom retriever that considers both similarity and recency"""
+    
+    # First get more documents than needed
+    initial_results = vector_db.similarity_search_with_score(query, k=k*2)
+    
+    # Extract dates and score documents
+    scored_docs = []
+    
+    for doc, similarity_score in initial_results:
+        # Extract dates from document content and metadata
+        content_dates = extract_dates_from_text(doc.page_content)
+        metadata_dates = []
+        
+        # Check if there's date info in metadata
+        if 'extracted_dates' in doc.metadata:
+            metadata_dates.extend(doc.metadata['extracted_dates'])
+        if 'most_recent_date' in doc.metadata:
+            metadata_dates.append(doc.metadata['most_recent_date'])
+        
+        # Find the most recent date
+        all_dates = content_dates + metadata_dates
+        if all_dates:
+            most_recent_date = max(all_dates)
+            recent_year = most_recent_date[0]
+        else:
+            recent_year = 2020  # Default old year
+        
+        # Check if query asks for "latest" or "recent"
+        is_recency_query = any(keyword in query.lower() for keyword in 
+                              ['latest', 'recent', 'new', 'current', 'updated'])
+        
+        if is_recency_query:
+            # For recency queries, heavily weight recent documents
+            recency_bonus = max(0, (recent_year - 2020) * 0.2)  # Bonus for recent years
+            final_score = similarity_score - recency_bonus  # Lower score is better for similarity
+        else:
+            final_score = similarity_score
+        
+        scored_docs.append({
+            'doc': doc,
+            'similarity_score': similarity_score,
+            'most_recent_year': recent_year,
+            'final_score': final_score,
+            'dates_found': all_dates
+        })
+    
+    # Sort by final score (lower is better for similarity)
+    if any(keyword in query.lower() for keyword in ['latest', 'recent', 'new', 'current']):
+        # For recency queries, prioritize by year first, then similarity
+        scored_docs.sort(key=lambda x: (-x['most_recent_year'], x['similarity_score']))
+    else:
+        # For regular queries, use similarity
+        scored_docs.sort(key=lambda x: x['final_score'])
+    
+    # Return top k documents
+    return [item['doc'] for item in scored_docs[:k]]
+
+# Custom retrieval chain with date awareness
+class DateAwareRetrievalChain:
+    def __init__(self, vector_db, llm, prompt_template):
+        self.vector_db = vector_db
+        self.llm = llm
+        self.prompt_template = prompt_template
+        
+    def invoke(self, query_dict):
+        query = query_dict['input']
+        
+        # Use date-aware retrieval
+        relevant_docs = create_date_aware_retriever(self.vector_db, query, k=8)
+        
+        # Create context from retrieved documents with date information
+        context_parts = []
+        for i, doc in enumerate(relevant_docs):
+            doc_dates = doc.metadata.get('extracted_dates', [])
+            most_recent = max(doc_dates) if doc_dates else (2020, 1, 1)
+            recent_year = most_recent[0]
+            
+            context_parts.append(
+                f"Document {i+1} (Most recent year: {recent_year}):\n{doc.page_content}"
+            )
+        
+        context = "\n\n".join(context_parts)
+        
+        # Format prompt
+        formatted_prompt = self.prompt_template.format(context=context, input=query)
+        
+        # Get LLM response
+        response = self.llm.invoke(formatted_prompt)
+        
+        return {
+            'answer': response.content,
+            'context': relevant_docs
+        }
 
 def smart_document_filter(document_links, query, ai_response, max_docs=3):
-
     if not document_links:
         return []
     
@@ -49,6 +197,12 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
         
         confidence_score = 0
         match_reasons = []
+        
+        # Check for date match and boost score for recent documents
+        doc_date = doc.get('extracted_date')
+        if doc_date and doc_date[0] >= 2024:  # Recent documents get priority
+            confidence_score += 30
+            match_reasons.append(f"Recent document: {doc_date[0]}")
         
         for mention in specific_mentions:
             mention_clean = mention.strip()
@@ -92,7 +246,7 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
             confidence_score += 20
             match_reasons.append(f"Domain terms: {list(matching_domain_terms)}")
         
-        if confidence_score >= 50:
+        if confidence_score >= 40:  # Lowered threshold to include recent docs
             high_confidence_docs.append({
                 'doc': doc,
                 'score': confidence_score,
@@ -141,7 +295,8 @@ def enhanced_web_scrape(url):
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
-def extract_document_links(html_content, url):
+def extract_document_links_with_dates(html_content, url):
+    """Enhanced document extraction with better date parsing"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
     for script in soup(["script", "style"]):
@@ -149,6 +304,68 @@ def extract_document_links(html_content, url):
     
     document_links = []
     
+    # Look for tables with document information
+    tables = soup.find_all('table')
+    for table in tables:
+        rows = table.find_all('tr')
+        headers = []
+        
+        # Get table headers
+        header_row = rows[0] if rows else None
+        if header_row:
+            headers = [th.get_text(strip=True).lower() for th in header_row.find_all(['th', 'td'])]
+        
+        # Find date column index
+        date_col_idx = -1
+        for i, header in enumerate(headers):
+            if any(date_keyword in header for date_keyword in ['updated', 'date', 'last']):
+                date_col_idx = i
+                break
+        
+        # Process data rows
+        for row in rows[1:]:  # Skip header row
+            cells = row.find_all(['td', 'th'])
+            if len(cells) >= 2:
+                # Extract document title and link
+                for cell_idx, cell in enumerate(cells):
+                    links_in_cell = cell.find_all('a', href=True)
+                    for link in links_in_cell:
+                        href = link.get('href')
+                        link_text = link.get_text(strip=True)
+                        
+                        if not href or len(link_text) < 5:
+                            continue
+                            
+                        # Make absolute URL
+                        if href.startswith('/'):
+                            href = urljoin(url, href)
+                        elif not href.startswith(('http://', 'https://')):
+                            href = urljoin(url, href)
+                        
+                        # Extract date from the same row
+                        extracted_date = None
+                        date_text = ""
+                        if date_col_idx != -1 and date_col_idx < len(cells):
+                            date_text = cells[date_col_idx].get_text(strip=True)
+                            dates_found = extract_dates_from_text(date_text)
+                            if dates_found:
+                                extracted_date = max(dates_found)  # Get most recent date
+                        
+                        # Check if it's a relevant document
+                        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                                           'amendment', 'notification', 'order', 'policy', 'master', 
+                                           'framework', 'directive', 'insurance']
+                        
+                        if any(keyword in link_text.lower() for keyword in document_keywords):
+                            document_links.append({
+                                'title': link_text,
+                                'link': href,
+                                'extracted_date': extracted_date,
+                                'date_text': date_text,
+                                'type': 'reference'
+                            })
+    
+    # Also extract from other sections (keeping original logic)
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -169,79 +386,21 @@ def extract_document_links(html_content, url):
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
         if has_doc_keywords and len(link_text) > 5:
+            # Try to extract date from surrounding text
+            parent = link.parent
+            surrounding_text = parent.get_text() if parent else ""
+            surrounding_dates = extract_dates_from_text(surrounding_text)
+            extracted_date = max(surrounding_dates) if surrounding_dates else None
+            
             document_links.append({
                 'title': link_text,
                 'link': href,
+                'extracted_date': extracted_date,
+                'date_text': surrounding_text[:100] if surrounding_text else "",
                 'type': 'content'
             })
     
-    tables = soup.find_all('table')
-    for table in tables:
-        rows = table.find_all('tr')
-        for row in rows:
-            cells = row.find_all(['td', 'th'])
-            if len(cells) >= 2:
-                for cell in cells:
-                    links_in_cell = cell.find_all('a', href=True)
-                    for link in links_in_cell:
-                        href = link.get('href')
-                        link_text = link.get_text(strip=True)
-                        
-                        if not href or len(link_text) < 5:
-                            continue
-                            
-                        if href.startswith('/'):
-                            href = urljoin(url, href)
-                        elif not href.startswith(('http://', 'https://')):
-                            href = urljoin(url, href)
-                        
-                        document_patterns = [
-                            r'act.*\d{4}',
-                            r'circular.*\d+',
-                            r'amendment.*act',
-                            r'insurance.*act',
-                            r'guideline',
-                            r'master.*direction',
-                            r'regulation.*\d+',
-                            r'aadhaar.*act'
-                        ]
-                        
-                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        
-                        if is_likely_document:
-                            document_links.append({
-                                'title': link_text,
-                                'link': href,
-                                'type': 'reference'
-                            })
-    
-    content_sections = soup.find_all(['div', 'section', 'article'])
-    for section in content_sections:
-        section_text = section.get_text().lower()
-        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
-            links_in_section = section.find_all('a', href=True)
-            for link in links_in_section:
-                href = link.get('href')
-                link_text = link.get_text(strip=True)
-                
-                if not href or len(link_text) < 5:
-                    continue
-                
-                if href.startswith('/'):
-                    href = urljoin(url, href)
-                elif not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
-                
-                if 10 < len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                                       'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
-                    if any(keyword in link_text.lower() for keyword in document_keywords):
-                        document_links.append({
-                            'title': link_text,
-                            'link': href,
-                            'type': 'reference'
-                        })
-    
+    # Remove duplicates
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -250,7 +409,11 @@ def extract_document_links(html_content, url):
             seen_links.add(link_key)
             unique_document_links.append(link_info)
     
-    unique_document_links.sort(key=lambda x: (x['type'] != 'content', x['title']))
+    # Sort by date (most recent first), then by type
+    unique_document_links.sort(key=lambda x: (
+        x['extracted_date'][0] if x['extracted_date'] else 2020,
+        x['type'] != 'content'
+    ), reverse=True)
     
     return unique_document_links
 
@@ -262,6 +425,7 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
+    # Extract news sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -273,7 +437,8 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
-    content_sections['document_links'] = extract_document_links(html_content, url)
+    # Extract document links with enhanced date parsing
+    content_sections['document_links'] = extract_document_links_with_dates(html_content, url)
     
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
@@ -281,6 +446,36 @@ def extract_structured_content(html_content, url):
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
     
     return clean_text, content_sections
+
+def create_enhanced_documents(loaded_docs):
+    """Create documents with enhanced date metadata"""
+    enhanced_docs = []
+    
+    for doc in loaded_docs:
+        # Extract dates from content
+        content_dates = extract_dates_from_text(doc.page_content)
+        
+        # Create enhanced metadata
+        enhanced_metadata = doc.metadata.copy()
+        enhanced_metadata['extracted_dates'] = content_dates
+        enhanced_metadata['most_recent_date'] = max(content_dates) if content_dates else (2020, 1, 1)
+        enhanced_metadata['has_recent_content'] = any(date[0] >= 2024 for date in content_dates)
+        
+        # Add date context to content for better retrieval
+        date_context = ""
+        if content_dates:
+            recent_years = sorted(set(date[0] for date in content_dates), reverse=True)
+            date_context = f"Document contains information from years: {', '.join(map(str, recent_years[:5]))}. "
+        
+        enhanced_content = date_context + doc.page_content
+        
+        enhanced_doc = Document(
+            page_content=enhanced_content,
+            metadata=enhanced_metadata
+        )
+        enhanced_docs.append(enhanced_doc)
+    
+    return enhanced_docs
 
 def load_hardcoded_websites():
     loaded_docs = []
@@ -293,9 +488,17 @@ def load_hardcoded_websites():
             if html_content:
                 clean_text, sections = extract_structured_content(html_content, url)
                 
+                # Add date information to metadata
+                doc_dates = extract_dates_from_text(clean_text)
+                
                 doc = Document(
                     page_content=clean_text,
-                    metadata={"source": url, "sections": sections}
+                    metadata={
+                        "source": url, 
+                        "sections": sections,
+                        "extracted_dates": doc_dates,
+                        "most_recent_date": max(doc_dates) if doc_dates else (2020, 1, 1)
+                    }
                 )
                 loaded_docs.append(doc)
                 
@@ -305,20 +508,23 @@ def load_hardcoded_websites():
                             st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
                 if sections.get('document_links'):
-                    with st.expander(f"Document Links found from {url}"):
+                    with st.expander(f"Document Links with Dates from {url}"):
                         st.write(f"**Total document links found:** {len(sections['document_links'])}")
                         
-                        content_docs = [link for link in sections['document_links'] if link['type'] == 'content']
-                        ref_docs = [link for link in sections['document_links'] if link['type'] == 'reference']
+                        # Separate documents with and without dates
+                        doc_links_with_dates = [link for link in sections['document_links'] if link.get('extracted_date')]
+                        doc_links_without_dates = [link for link in sections['document_links'] if not link.get('extracted_date')]
                         
-                        if content_docs:
-                            st.write("**Content Pages:**")
-                            for i, link_info in enumerate(content_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        if doc_links_with_dates:
+                            st.write("**Recent Documents (with dates):**")
+                            for i, link_info in enumerate(doc_links_with_dates[:10]):
+                                date_tuple = link_info['extracted_date']
+                                date_str = f"{date_tuple[2]:02d}/{date_tuple[1]:02d}/{date_tuple[0]}"
+                                st.write(f"{i+1}. **{date_str}** - [{link_info['title']}]({link_info['link']})")
                         
-                        if ref_docs:
-                            st.write("**Reference Documents:**")
-                            for i, link_info in enumerate(ref_docs[:10]):
+                        if doc_links_without_dates:
+                            st.write("**Other Documents:**")
+                            for i, link_info in enumerate(doc_links_without_dates[:5]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                 else:
                     st.write(f"No relevant document links found from {url}")
@@ -340,6 +546,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -352,6 +559,7 @@ if 'docs_loaded' not in st.session_state:
     st.session_state['docs_loaded'] = False
 
 st.title("Web GEN-ie")
+st.subheader("Enhanced with Date-Aware Retrieval")
 
 st.subheader("Configuration")
 api_key = st.text_input(
@@ -373,49 +581,47 @@ if not st.session_state['docs_loaded']:
             st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
             
             if api_key and st.session_state['loaded_docs']:
-                with st.spinner("Processing documents..."):
+                with st.spinner("Processing documents with enhanced date awareness..."):
                     try:
                         llm = ChatGroq(groq_api_key=api_key, model_name='meta-llama/llama-4-scout-17b-16e-instruct', temperature=0.2, top_p=0.2)
                         st.session_state['llm'] = llm
                         
-                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                        # Enhanced prompt with better date handling
+                        prompt_template = """
+                        You are a regulatory document expert specializing in IRDAI, UIDAI, PMLA and egazette websites.
                         
-                        prompt = ChatPromptTemplate.from_template(
-                            """
-                            You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
-                            
-                            **CRITICAL DATE HANDLING INSTRUCTIONS:**
-                            - When users ask for "latest", "recent", "new", or "current" information, you MUST prioritize the most recently dated documents
-                            - ALWAYS scan through ALL provided context to find the most recent dates for the requested topic
-                            - Compare dates across all relevant documents and highlight the newest information first
-                            - Explicitly mention document dates in your response (e.g., "According to the latest circular dated March 15, 2024...")
-                            - If multiple documents exist on the same topic, present them in chronological order with the newest first
-                            - Look for date indicators like: "Last Updated:", "Published on:", "Circular dated:", "Notification dated:", "Amendment dated:"
-                            
-                            **RESPONSE STRUCTURE FOR DATE-SENSITIVE QUERIES:**
-                            1. Start with the most recent information and its date
-                            2. Mention if this supersedes any earlier documents
-                            3. Provide the specific date and document reference
-                            4. If no recent updates exist, clearly state the date of the most current information available
-                            
-                            **GENERAL INSTRUCTIONS:**
-                            - ONLY answer questions that can be addressed using the provided context from the regulatory websites
-                            - If a question is completely outside the insurance/regulatory domain or if the information is not available in the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
-                            - When mentioning any acts, circulars, or regulations, try to reference the available document links with their dates
-                            - If you find any PII data in the question, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
-                            
-                            **EXAMPLE RESPONSE FORMAT FOR "LATEST" QUERIES:**
-                            "Based on the most recent information available, the latest [topic] guidelines were issued on [specific date] through [document type and reference]. This [updates/supersedes/adds to] the previous guidelines from [earlier date if applicable]..."
-                            
-                            <context>
-                            {context}
-                            </context>
-                            
-                            Question: {input}
-                            
-                            Remember: For any query asking for "latest" or "recent" information, your PRIMARY job is to identify and present the most recently dated relevant documents first, with explicit date mentions.
-                            """
-                        )
+                        **CRITICAL DATE HANDLING FOR "LATEST" QUERIES:**
+                        When users ask for "latest", "recent", "new", or "current" information, you MUST:
+                        
+                        1. **PRIORITIZE THE MOST RECENT DATES**: Look for the highest year numbers (2025, 2024, etc.) in the provided context
+                        2. **START WITH THE NEWEST**: Your first sentence should mention the most recent year/date you found
+                        3. **EXPLICIT DATE MENTIONS**: Always include specific dates like "According to the latest circular dated July 29, 2025..."
+                        4. **CHRONOLOGICAL ORDER**: Present information from newest to oldest
+                        5. **DOCUMENT YEAR LABELS**: Each document shows its most recent year - use this information
+                        
+                        **RESPONSE FORMAT FOR "LATEST" QUERIES:**
+                        "Based on the most recent information available from [YEAR], the latest [topic] guidelines were [specific details with date]. This updates/supersedes previous guidelines from [earlier dates if applicable]..."
+                        
+                        **GENERAL INSTRUCTIONS:**
+                        - ONLY answer questions using the provided regulatory website context
+                        - If completely outside insurance/regulatory domain or no context available: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs."
+                        - If PII data detected: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+                        - Reference document links and dates when mentioning acts, circulars, or regulations
+                        
+                        **CRITICAL**: If you see documents from 2025, 2024, and 2023, and user asks for "latest", you MUST start with 2025 information first!
+                        
+                        Context (documents labeled with most recent years):
+                        {context}
+                        
+                        Question: {input}
+                        
+                        Remember: For "latest" queries, your FIRST sentence must mention the most recent year found in the documents.
+                        """
+                        
+                        # Create enhanced documents with date metadata
+                        enhanced_docs = create_enhanced_documents(st.session_state['loaded_docs'])
+                        
+                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
                         
                         text_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=1500,
@@ -423,39 +629,61 @@ if not st.session_state['docs_loaded']:
                             length_function=len,
                         )
                         
-                        document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
-                        st.write(f"Number of chunks created: {len(document_chunks)}")
+                        document_chunks = text_splitter.split_documents(enhanced_docs)
+                        st.write(f"Number of enhanced chunks created: {len(document_chunks)}")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        document_chain = create_stuff_documents_chain(llm, prompt)
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+                        # Create custom date-aware retrieval chain instead of standard chain
+                        st.session_state['retrieval_chain'] = DateAwareRetrievalChain(
+                            st.session_state['vector_db'], 
+                            llm, 
+                            prompt_template
+                        )
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("Documents processed and ready for querying!")
+                        st.success("Documents processed with enhanced date awareness and ready for querying!")
+                        
+                        # Display date analysis
+                        all_dates = []
+                        for doc in enhanced_docs:
+                            dates = doc.metadata.get('extracted_dates', [])
+                            all_dates.extend(dates)
+                        
+                        if all_dates:
+                            unique_years = sorted(set(date[0] for date in all_dates), reverse=True)
+                            st.info(f"📅 Document years found: {', '.join(map(str, unique_years[:10]))}")
                     
                     except Exception as e:
-                        st.error(f"Error initializing LLM: {e}")
+                        st.error(f"Error initializing enhanced LLM: {e}")
                         st.error("Please check your API key and try again.")
 
 st.subheader("Ask Questions")
-query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
+st.markdown("💡 **Tip**: Try asking for 'latest guidelines' or 'recent amendments' to see the enhanced date-aware retrieval in action!")
+
+query = st.text_input("Enter your query:", value="What are the latest Insurance Acts and amendments?", placeholder="e.g., What are the latest IRDAI guidelines for 2025?")
 
 if st.button("Get Answer", disabled=not api_key) and query:
     if not api_key:
         st.error("Please enter your Groq API key first.")
     elif st.session_state['retrieval_chain']:
-        with st.spinner("Searching and generating answer..."):
+        with st.spinner("Searching with date-aware retrieval and generating answer..."):
             try:
                 response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
                 
+                # Show which years were found in the response
+                response_dates = extract_dates_from_text(response['answer'])
+                if response_dates:
+                    response_years = sorted(set(date[0] for date in response_dates), reverse=True)
+                    st.info(f"📅 Years mentioned in response: {', '.join(map(str, response_years))}")
+                
                 if not is_fallback_response(response['answer']):
                     retrieved_docs = response.get('context', [])
                     
+                    # Enhanced document link filtering with date awareness
                     all_document_links = []
                     for doc in retrieved_docs:
                         if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
@@ -468,29 +696,54 @@ if st.button("Get Answer", disabled=not api_key) and query:
                             all_document_links, 
                             query, 
                             response['answer'], 
-                            max_docs=3
+                            max_docs=5  # Increased to show more recent docs
                         )
                         
                         if relevant_docs:
-                            st.write("\n**📄 Relevant Document Links**")
+                            st.write("\n**📄 Most Relevant Document Links**")
                             for i, link_info in enumerate(relevant_docs):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                                date_str = ""
+                                if link_info.get('extracted_date'):
+                                    date_tuple = link_info['extracted_date']
+                                    date_str = f" ({date_tuple[2]:02d}/{date_tuple[1]:02d}/{date_tuple[0]})"
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']}){date_str}")
                         else:
                             st.info("No high-confidence document links found that directly match the AI response content.")
                     
+                    # Show document sources with their dates
                     st.write("\n**📍 Information Sources:**")
-                    sources = set()
+                    sources_with_dates = set()
                     for doc in retrieved_docs:
                         source = doc.metadata.get('source', 'Unknown')
-                        sources.add(source)
+                        doc_dates = doc.metadata.get('extracted_dates', [])
+                        if doc_dates:
+                            latest_year = max(date[0] for date in doc_dates)
+                            sources_with_dates.add(f"{source} (Latest: {latest_year})")
+                        else:
+                            sources_with_dates.add(source)
                     
-                    for i, source in enumerate(sources, 1):
-                        st.write(f"{i}. [{source}]({source})")
+                    for i, source in enumerate(sources_with_dates, 1):
+                        if source.startswith('http'):
+                            st.write(f"{i}. [{source}]({source.split(' (')[0]})")
+                        else:
+                            st.write(f"{i}. {source}")
+                    
+                    # Debug information for date-aware retrieval
+                    if st.checkbox("Show Debug Info (Document Dates)", value=False):
+                        st.write("**Retrieved Documents with Dates:**")
+                        for i, doc in enumerate(retrieved_docs):
+                            doc_dates = doc.metadata.get('extracted_dates', [])
+                            most_recent = max(doc_dates) if doc_dates else None
+                            st.write(f"Doc {i+1}: Most recent date = {most_recent}")
+                            st.write(f"Content preview: {doc.page_content[:200]}...")
+                            st.write("---")
+                            
                 else:
                     st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
             
             except Exception as e:
                 st.error(f"Error generating response: {e}")
                 st.error("Please check your API key and try again.")
+                st.write("If the error persists, try reloading the websites.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
