@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/guidelines",
+                      "https://irdai.gov.in",
                       "https://enforcementdirectorate.gov.in/pmla",
                       "https://egazette.gov.in/(S(ny02n01nkwfqn4kbx2rzp1dg))/default.aspx#"
                      ]
