@@ -297,7 +297,7 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
         x['doc'].get('last_updated_date', (2020, 1, 1))[0]  # Year as tiebreaker
     ), reverse=True)
     
-    return [item['doc'] for item in high_confidence_docs[:max_docs]]'compliance']
+    return [item['doc'] for item in high_confidence_docs[:max_docs]]'compliance']]
         ai_domain_terms = [term for term in domain_terms if term in ai_response_lower]
         title_domain_terms = [term for term in domain_terms if term in title_lower]
         
