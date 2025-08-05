@@ -13,12 +13,90 @@ import time
 import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
+import os
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/guidelines",
-                      "https://irdai.gov.in",
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
                       "https://enforcementdirectorate.gov.in/pmla",
-                      "https://egazette.gov.in/(S(ny02n01nkwfqn4kbx2rzp1dg))/default.aspx#"
-                     ]
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa"
+
+                      ]
+
+
+def initialize_faiss_store(documents, embedding_function):
+    """
+    Initialize FAISS vector store with documents
+    """
+    try:
+        if documents:
+            # Create FAISS vector store from documents
+            vector_store = FAISS.from_documents(
+                documents=documents,
+                embedding=embedding_function
+            )
+            st.success(f"Successfully added {len(documents)} documents to FAISS vector store")
+            return vector_store
+        else:
+            # Create empty FAISS vector store
+            vector_store = FAISS.from_texts(
+                texts=[""],  # Dummy text to initialize
+                embedding=embedding_function
+            )
+            return vector_store
+
+    except Exception as e:
+        st.error(f"Error initializing FAISS store: {e}")
+        return None
+
+
+def reset_vector_store():
+    """
+    Reset FAISS vector store by clearing session state
+    """
+    try:
+        # For FAISS, we just clear the session state
+        if 'vector_db' in st.session_state:
+            st.session_state['vector_db'] = None
+        if 'retrieval_chain' in st.session_state:
+            st.session_state['retrieval_chain'] = None
+        
+        st.success("Vector store reset successfully")
+        return True
+
+    except Exception as e:
+        st.error(f"Error resetting vector store: {e}")
+        return False
+
 
 def smart_document_filter(document_links, query, ai_response, max_docs=3):
 
@@ -106,6 +184,7 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
     
     return [item['doc'] for item in high_confidence_docs[:max_docs]]
 
+
 def extract_key_terms(text):
     stop_words = {
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
@@ -116,12 +195,13 @@ def extract_key_terms(text):
         'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
         'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very'
     }
-    
+
     words = re.findall(r'\b[a-zA-Z]{3,}\b', text)
     meaningful_terms = [word.lower() for word in words if word.lower() not in stop_words]
-    
+
     term_counts = Counter(meaningful_terms)
     return [term for term, count in term_counts.most_common(20)]
+
 
 def enhanced_web_scrape(url):
     try:
@@ -132,52 +212,53 @@ def enhanced_web_scrape(url):
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         }
-        
+
         session = requests.Session()
         session.headers.update(headers)
-        
+
         response = session.get(url, timeout=15)
         response.raise_for_status()
         return response.text
-        
+
     except Exception as e:
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
+
 def extract_document_links(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     for script in soup(["script", "style"]):
         script.decompose()
-    
+
     document_links = []
-    
+
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
         link_text = link.get_text(strip=True)
-        
+
         if not href or len(link_text) < 3:
             continue
-            
+
         if href.startswith('/'):
             href = urljoin(url, href)
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
-        
-        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
-                           'notification', 'order', 'policy', 'master', 'framework', 'directive',
-                           'insurance', 'aadhaar', 'compliance', 'licensing']
-        
+
+        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment',
+                             'notification', 'order', 'policy', 'master', 'framework', 'directive',
+                             'insurance', 'aadhaar', 'compliance', 'licensing']
+
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
-        
+
         if has_doc_keywords and len(link_text) > 5:
             document_links.append({
                 'title': link_text,
                 'link': href,
                 'type': 'content'
             })
-    
+
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
@@ -189,15 +270,15 @@ def extract_document_links(html_content, url):
                     for link in links_in_cell:
                         href = link.get('href')
                         link_text = link.get_text(strip=True)
-                        
+
                         if not href or len(link_text) < 5:
                             continue
-                            
+
                         if href.startswith('/'):
                             href = urljoin(url, href)
                         elif not href.startswith(('http://', 'https://')):
                             href = urljoin(url, href)
-                        
+
                         document_patterns = [
                             r'act.*\d{4}',
                             r'circular.*\d+',
@@ -208,16 +289,16 @@ def extract_document_links(html_content, url):
                             r'regulation.*\d+',
                             r'aadhaar.*act'
                         ]
-                        
+
                         is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        
+
                         if is_likely_document:
                             document_links.append({
                                 'title': link_text,
                                 'link': href,
                                 'type': 'reference'
                             })
-    
+
     content_sections = soup.find_all(['div', 'section', 'article'])
     for section in content_sections:
         section_text = section.get_text().lower()
@@ -226,25 +307,25 @@ def extract_document_links(html_content, url):
             for link in links_in_section:
                 href = link.get('href')
                 link_text = link.get_text(strip=True)
-                
+
                 if not href or len(link_text) < 5:
                     continue
-                
+
                 if href.startswith('/'):
                     href = urljoin(url, href)
                 elif not href.startswith(('http://', 'https://')):
                     href = urljoin(url, href)
-                
+
                 if 10 < len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                                       'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
+                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule',
+                                         'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
                     if any(keyword in link_text.lower() for keyword in document_keywords):
                         document_links.append({
                             'title': link_text,
                             'link': href,
                             'type': 'reference'
                         })
-    
+
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
@@ -252,86 +333,90 @@ def extract_document_links(html_content, url):
         if link_key not in seen_links:
             seen_links.add(link_key)
             unique_document_links.append(link_info)
-    
+
     unique_document_links.sort(key=lambda x: (x['type'] != 'content', x['title']))
-    
+
     return unique_document_links
 
+
+# exclude ShellScript, .exe
 def extract_structured_content(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     for script in soup(["script", "style"]):
         script.decompose()
-    
+
     content_sections = {}
-    
+
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
-    
+
     if news_sections:
         content_sections['news'] = []
         for section in news_sections:
             text = section.get_text(strip=True)
             if len(text) > 50:
                 content_sections['news'].append(text)
-    
+
     content_sections['document_links'] = extract_document_links(html_content, url)
-    
+
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
-    
+
     return clean_text, content_sections
+
 
 def load_hardcoded_websites():
     loaded_docs = []
-    
+
     for url in HARDCODED_WEBSITES:
         try:
             st.write(f"Loading URL: {url}")
-            
+
             html_content = enhanced_web_scrape(url)
             if html_content:
                 clean_text, sections = extract_structured_content(html_content, url)
-                
+
                 doc = Document(
                     page_content=clean_text,
                     metadata={"source": url, "sections": sections}
                 )
                 loaded_docs.append(doc)
-                
+
                 if sections.get('news'):
                     with st.expander(f"News/Updates found from {url}"):
                         for i, news_item in enumerate(sections['news'][:3]):
-                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
-                
+                            st.write(f"**Item {i + 1}:** {news_item[:200]}...")
+
                 if sections.get('document_links'):
                     with st.expander(f"Document Links found from {url}"):
                         st.write(f"**Total document links found:** {len(sections['document_links'])}")
-                        
+
                         content_docs = [link for link in sections['document_links'] if link['type'] == 'content']
                         ref_docs = [link for link in sections['document_links'] if link['type'] == 'reference']
-                        
+
                         if content_docs:
                             st.write("**Content Pages:**")
                             for i, link_info in enumerate(content_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        
+                                st.write(f"{i + 1}. [{link_info['title']}]({link_info['link']})")
+
                         if ref_docs:
                             st.write("**Reference Documents:**")
                             for i, link_info in enumerate(ref_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                                st.write(f"{i + 1}. [{link_info['title']}]({link_info['link']})")
                 else:
                     st.write(f"No relevant document links found from {url}")
-            
+
             st.success(f"Successfully loaded content from {url}")
-            
+
         except Exception as e:
             st.error(f"Error loading {url}: {e}")
-    
+
     return loaded_docs
+
 
 def is_fallback_response(response_text):
     fallback_phrases = [
@@ -340,8 +425,9 @@ def is_fallback_response(response_text):
         "outside the scope of the data",
         "However, I've gathered information that closely aligns"
     ]
-    
+
     return any(phrase in response_text for phrase in fallback_phrases)
+
 
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
@@ -356,36 +442,30 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-st.subheader("Configuration")
-api_key = st.text_input(
-    "Enter your Groq API Key:", 
-    type="password",
-    placeholder="Enter your Groq API key here...",
-    help="You can get your API key from https://console.groq.com/"
-)
+if st.sidebar.button("Reset Vector Store"):
+    if reset_vector_store():
+        st.session_state['vector_db'] = None
+        st.session_state['retrieval_chain'] = None
+        st.session_state['docs_loaded'] = False
+        st.rerun()
 
-if api_key and not api_key.startswith("gsk_"):
-    st.warning("⚠️ Groq API keys typically start with 'gsk_'. Please verify your API key.")
+api_key = "####"
 
 if not st.session_state['docs_loaded']:
-    if st.button("Load Websites", disabled=not api_key):
-        if not api_key:
-            st.error("Please enter your Groq API key first.")
-        else:
-            st.session_state['loaded_docs'] = load_hardcoded_websites()
-            st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
-            
-            if api_key and st.session_state['loaded_docs']:
-                with st.spinner("Processing documents..."):
-                    try:
-                        llm = ChatGroq(groq_api_key=api_key, model_name='meta-llama/llama-4-scout-17b-16e-instruct', temperature=0.2, top_p=0.2)
-                        st.session_state['llm'] = llm
-                        
-                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                        
-                        prompt = ChatPromptTemplate.from_template(
-                            """
-                            You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
+    if st.button("Load Websites"):
+        st.session_state['loaded_docs'] = load_hardcoded_websites()
+        st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
+
+        if api_key and st.session_state['loaded_docs']:
+            with st.spinner("Processing documents and storing in FAISS..."):
+                llm = ChatGroq(groq_api_key=api_key, model_name='llama3-70b-8192', temperature=0.2, top_p=0.2)
+                st.session_state['llm'] = llm
+
+                hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+                prompt = ChatPromptTemplate.from_template(
+                    """
+                    You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
                             
                             IMPORTANT INSTRUCTIONS:
                             - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
@@ -408,83 +488,82 @@ if not st.session_state['docs_loaded']:
                             Question: {input}
                             
                             Answer with specific details, dates, and references where available. If relevant documents are mentioned, note that direct links may be available in the sources section.
-                            """
-                        )
-                        
-                        text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=1500,
-                            chunk_overlap=200,
-                            length_function=len,
-                        )
-                        
-                        document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
-                        st.write(f"Number of chunks created: {len(document_chunks)}")
-                        
-                        st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
-                        
-                        document_chain = create_stuff_documents_chain(llm, prompt)
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
-                        
-                        st.session_state['docs_loaded'] = True
-                        st.success("Documents processed and ready for querying!")
-                    
-                    except Exception as e:
-                        st.error(f"Error initializing LLM: {e}")
-                        st.error("Please check your API key and try again.")
+                    """
+                )
+
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1500,
+                    chunk_overlap=200,
+                    length_function=len,
+                )
+
+                document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
+                st.write(f"Number of chunks created: {len(document_chunks)}")
+
+                st.session_state['vector_db'] = initialize_faiss_store(document_chunks, hf_embedding)
+
+                if st.session_state['vector_db']:
+                    document_chain = create_stuff_documents_chain(llm, prompt)
+                    retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
+                    st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+
+                    st.session_state['docs_loaded'] = True
+                    st.success("Documents processed and stored in PostgreSQL vector store!")
+                else:
+                    st.error("Failed to initialize PostgreSQL vector store")
 
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
-if st.button("Get Answer", disabled=not api_key) and query:
-    if not api_key:
-        st.error("Please enter your Groq API key first.")
-    elif st.session_state['retrieval_chain']:
+if st.button("Get Answer") and query:
+    if st.session_state['retrieval_chain']:
         with st.spinner("Searching and generating answer..."):
-            try:
-                response = st.session_state['retrieval_chain'].invoke({"input": query})
-                
-                st.subheader("Response:")
-                st.write(response['answer'])
-                
-                if not is_fallback_response(response['answer']):
-                    retrieved_docs = response.get('context', [])
-                    
-                    all_document_links = []
-                    for doc in retrieved_docs:
-                        if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                            for link_info in doc.metadata['sections']['document_links']:
-                                if link_info not in all_document_links:
-                                    all_document_links.append(link_info)
-                    
-                    if all_document_links:
-                        relevant_docs = smart_document_filter(
-                            all_document_links, 
-                            query, 
-                            response['answer'], 
-                            max_docs=3
-                        )
-                        
-                        if relevant_docs:
-                            st.write("\n**📄 Relevant Document Links**")
-                            for i, link_info in enumerate(relevant_docs):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        else:
-                            st.info("No high-confidence document links found that directly match the AI response content.")
-                    
-                    st.write("\n**📍 Information Sources:**")
-                    sources = set()
-                    for doc in retrieved_docs:
-                        source = doc.metadata.get('source', 'Unknown')
-                        sources.add(source)
-                    
-                    for i, source in enumerate(sources, 1):
-                        st.write(f"{i}. [{source}]({source})")
-                else:
-                    st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
-            
-            except Exception as e:
-                st.error(f"Error generating response: {e}")
-                st.error("Please check your API key and try again.")
+            response = st.session_state['retrieval_chain'].invoke({"input": query})
+
+            st.subheader("Response:")
+            st.write(response['answer'])
+
+            if not is_fallback_response(response['answer']):
+                retrieved_docs = response.get('context', [])
+
+                all_document_links = []
+                for doc in retrieved_docs:
+                    if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
+                        for link_info in doc.metadata['sections']['document_links']:
+                            if link_info not in all_document_links:
+                                all_document_links.append(link_info)
+
+                if all_document_links:
+                    relevant_docs = smart_document_filter(
+                        all_document_links,
+                        query,
+                        response['answer'],
+                        max_docs=3
+                    )
+
+                    if relevant_docs:
+                        st.write("\n**Most Relevant Documents:**")
+                        for i, link_info in enumerate(relevant_docs):
+                            st.write(f"{i + 1}. [{link_info['title']}]({link_info['link']})")
+                    else:
+                        st.info("No highly relevant document links found for this specific query.")
+
+                st.write("\n**Information Sources:**")
+                sources = set()
+                for doc in retrieved_docs:
+                    source = doc.metadata.get('source', 'Unknown')
+                    sources.add(source)
+
+                for i, source in enumerate(sources, 1):
+                    st.write(f"{i}. [{source}]({source})")
+            else:
+                st.info(
+                    "No specific documents or sources are available for this query as it falls outside the current data scope.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
+
+if st.session_state['vector_db']:
+    st.sidebar.success("Connected to PostgreSQL Vector Store")
+    st.sidebar.info("Using PGVector for semantic search")
+else:
+    st.sidebar.warning("Vector store not initialized")
