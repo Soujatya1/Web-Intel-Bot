@@ -417,7 +417,7 @@ if st.sidebar.button("Reset Vector Store"):
         st.session_state['docs_loaded'] = False
         st.rerun()
 
-api_key = "####"
+api_key = "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"
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites"):
