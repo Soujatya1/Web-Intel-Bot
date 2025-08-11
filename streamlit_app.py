@@ -136,7 +136,7 @@ def smart_document_filter(document_links, query, ai_response, max_docs=3):
             confidence_score += 20
             match_reasons.append(f"Domain terms: {list(matching_domain_terms)}")
         
-        if confidence_score >= 90:
+        if confidence_score >= 60:
             high_confidence_docs.append({
                 'doc': doc,
                 'score': confidence_score,
