@@ -23,6 +23,7 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://irdai.gov.in/notifications",
                       "https://irdai.gov.in/circulars",
                       "https://irdai.gov.in/guidelines",
+                      "https://irdai.gov.in/guidelines?p_p_id=com_irdai_document_media_IRDAIDocumentMediaPortlet&p_p_lifecycle=0&p_p_state=normal&p_p_mode=view&_com_irdai_document_media_IRDAIDocumentMediaPortlet_delta=20&_com_irdai_document_media_IRDAIDocumentMediaPortlet_resetCur=false&_com_irdai_document_media_IRDAIDocumentMediaPortlet_cur=2"
                       "https://irdai.gov.in/orders1",
                       "https://irdai.gov.in/notices1",
                       "https://irdai.gov.in/exposure-drafts",
