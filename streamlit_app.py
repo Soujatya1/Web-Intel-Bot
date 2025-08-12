@@ -473,7 +473,7 @@ if not st.session_state['docs_loaded']:
                             NEGATIVE SCENARIO HANDLING (FOLLOW THIS DILIGENTLY):
 
                             First, observe whether the question returns relevant context and is passed here
-                            Second, if the same is followed, respond normally, ELSE, respond with "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+                            Second, if the same is followed, respond normally, ELSE if the CONTEXT IS COMPLETELY IRRELEVANT, respond with "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                             
                             Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                             
