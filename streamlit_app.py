@@ -461,7 +461,7 @@ if not st.session_state['docs_loaded']:
                             
                             IMPORTANT INSTRUCTIONS:
                             - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
-                            - If the question is completely outside the insurance/regulatory domain and if the information is not available in the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+                            - If the question does not return any answer/response from the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                             - Pay special attention to dates, recent updates, and chronological information
                             - When asked about "what's new" or recent developments, focus on the most recent information available
                             - Look for press releases, circulars, guidelines, and policy updates
