@@ -470,7 +470,7 @@ if not st.session_state['docs_loaded']:
                             - When mentioning any acts, circulars, or regulations, try to reference the available document links
                             - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address) state that information is not available, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
 
-                            NEGATIVE SCENARIO HANDLING:
+                            NEGATIVE SCENARIO HANDLING (FOLLOW THIS DILIGENTLY):
 
                             First, observe whether the question returns relevant context and is passed here
                             Second, if the same is followed, respond normally, ELSE, respond with "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
