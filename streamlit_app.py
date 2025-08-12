@@ -461,7 +461,6 @@ if not st.session_state['docs_loaded']:
                             
                             IMPORTANT INSTRUCTIONS:
                             - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
-                            - If no relevant information as per the question asked is extracted, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                             - Pay special attention to dates, recent updates, and chronological information
                             - When asked about "what's new" or recent developments, focus on the most recent information available
                             - Look for press releases, circulars, guidelines, and policy updates
@@ -470,6 +469,11 @@ if not st.session_state['docs_loaded']:
                             - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
                             - When mentioning any acts, circulars, or regulations, try to reference the available document links
                             - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address) state that information is not available, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+
+                            NEGATIVE SCENARIO HANDLING:
+
+                            First, observe whether the question returns relevant context and is passed here
+                            Second, if the same is followed, respond normally, ELSE, respond with "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                             
                             Based on the context provided from the insurance regulatory website(s), answer the user's question accurately and comprehensively.
                             
