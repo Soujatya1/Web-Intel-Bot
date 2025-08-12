@@ -60,7 +60,7 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
                       ]
 
-def smart_document_filter(document_links, query, ai_response, max_docs=3):
+def smart_document_filter(document_links, query, ai_response, max_docs=2):
 
     if not document_links:
         return []
