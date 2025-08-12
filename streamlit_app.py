@@ -383,7 +383,6 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
-# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -399,7 +398,6 @@ st.title("Web GEN-ie")
 
 st.subheader("Azure OpenAI Configuration")
 
-# Azure OpenAI configuration inputs
 col1, col2 = st.columns(2)
 
 with col1:
@@ -430,11 +428,10 @@ with col2:
         help="Azure OpenAI API version"
     )
 
-# Validate configuration
 config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
 
 if not config_complete:
-    st.warning("⚠️ Please fill in all Azure OpenAI configuration fields to proceed.")
+    st.warning("Please fill in all Azure OpenAI configuration fields to proceed.")
 
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites", disabled=not config_complete):
@@ -447,7 +444,6 @@ if not st.session_state['docs_loaded']:
             if config_complete and st.session_state['loaded_docs']:
                 with st.spinner("Processing documents..."):
                     try:
-                        # Initialize Azure OpenAI
                         llm = AzureChatOpenAI(
                             azure_endpoint=azure_endpoint,
                             api_key=api_key,
@@ -465,7 +461,6 @@ if not st.session_state['docs_loaded']:
                             
                             IMPORTANT INSTRUCTIONS:
                             - ONLY answer questions that can be addressed using the provided context ONLY from the provided websites
-                            - If the information as per the question asked, is not available in the provided context, respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
                             - Pay special attention to dates, recent updates, and chronological information
                             - When asked about "what's new" or recent developments, focus on the most recent information available
                             - Look for press releases, circulars, guidelines, and policy updates
@@ -564,13 +559,3 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 st.error("Please check your Azure OpenAI configuration and try again.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
-
-# Display configuration status
-if config_complete:
-    st.sidebar.success("✅ Azure OpenAI Configuration Complete")
-    st.sidebar.write("**Current Settings:**")
-    st.sidebar.write(f"- Endpoint: {azure_endpoint}")
-    st.sidebar.write(f"- Deployment: {deployment_name}")
-    st.sidebar.write(f"- API Version: {api_version}")
-else:
-    st.sidebar.warning("⚠️ Azure OpenAI Configuration Incomplete")
