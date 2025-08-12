@@ -449,7 +449,7 @@ if not st.session_state['docs_loaded']:
                             api_key=api_key,
                             azure_deployment=deployment_name,
                             api_version=api_version,
-                            temperature=0.2
+                            temperature=0.0
                         )
                         st.session_state['llm'] = llm
                         
