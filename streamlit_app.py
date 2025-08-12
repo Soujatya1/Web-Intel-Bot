@@ -450,7 +450,7 @@ if not st.session_state['docs_loaded']:
                             azure_deployment=deployment_name,
                             api_version=api_version,
                             temperature=0.0,
-                            top_p = 1.0
+                            top_p = 0.1
                         )
                         st.session_state['llm'] = llm
                         
@@ -501,7 +501,7 @@ if not st.session_state['docs_loaded']:
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         document_chain = create_stuff_documents_chain(llm, prompt)
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
