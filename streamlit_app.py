@@ -1,7 +1,6 @@
-
 import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_groq import ChatGroq
+from langchain_openai import AzureChatOpenAI
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
@@ -384,6 +383,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -397,29 +397,64 @@ if 'docs_loaded' not in st.session_state:
 
 st.title("Web GEN-ie")
 
-st.subheader("Configuration")
-api_key = st.text_input(
-    "Enter your Groq API Key:", 
-    type="password",
-    placeholder="Enter your Groq API key here...",
-    help="You can get your API key from https://console.groq.com/"
-)
+st.subheader("Azure OpenAI Configuration")
 
-if api_key and not api_key.startswith("gsk_"):
-    st.warning("⚠️ Groq API keys typically start with 'gsk_'. Please verify your API key.")
+# Azure OpenAI configuration inputs
+col1, col2 = st.columns(2)
+
+with col1:
+    azure_endpoint = st.text_input(
+        "Azure OpenAI Endpoint:", 
+        placeholder="https://your-resource.openai.azure.com/",
+        help="Your Azure OpenAI resource endpoint URL"
+    )
+    
+    api_key = st.text_input(
+        "Azure OpenAI API Key:", 
+        type="password",
+        placeholder="Enter your Azure OpenAI API key here...",
+        help="Your Azure OpenAI API key"
+    )
+
+with col2:
+    deployment_name = st.text_input(
+        "Deployment Name:", 
+        placeholder="gpt-4o",
+        help="The name of your deployed model (e.g., gpt-35-turbo, gpt-4)"
+    )
+    
+    api_version = st.selectbox(
+        "API Version:",
+        ["2025-01-01-preview"],
+        index=0,
+        help="Azure OpenAI API version"
+    )
+
+# Validate configuration
+config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
+
+if not config_complete:
+    st.warning("⚠️ Please fill in all Azure OpenAI configuration fields to proceed.")
 
 if not st.session_state['docs_loaded']:
-    if st.button("Load Websites", disabled=not api_key):
-        if not api_key:
-            st.error("Please enter your Groq API key first.")
+    if st.button("Load Websites", disabled=not config_complete):
+        if not config_complete:
+            st.error("Please complete the Azure OpenAI configuration first.")
         else:
             st.session_state['loaded_docs'] = load_hardcoded_websites()
             st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
             
-            if api_key and st.session_state['loaded_docs']:
+            if config_complete and st.session_state['loaded_docs']:
                 with st.spinner("Processing documents..."):
                     try:
-                        llm = ChatGroq(groq_api_key=api_key, model_name='meta-llama/llama-4-scout-17b-16e-instruct', temperature=0.2, top_p=0.2)
+                        # Initialize Azure OpenAI
+                        llm = AzureChatOpenAI(
+                            azure_endpoint=azure_endpoint,
+                            api_key=api_key,
+                            azure_deployment=deployment_name,
+                            api_version=api_version,
+                            temperature=0.2
+                        )
                         st.session_state['llm'] = llm
                         
                         hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -471,15 +506,15 @@ if not st.session_state['docs_loaded']:
                         st.success("Documents processed and ready for querying!")
                     
                     except Exception as e:
-                        st.error(f"Error initializing LLM: {e}")
-                        st.error("Please check your API key and try again.")
+                        st.error(f"Error initializing Azure OpenAI: {e}")
+                        st.error("Please check your Azure OpenAI configuration and try again.")
 
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
-if st.button("Get Answer", disabled=not api_key) and query:
-    if not api_key:
-        st.error("Please enter your Groq API key first.")
+if st.button("Get Answer", disabled=not config_complete) and query:
+    if not config_complete:
+        st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state['retrieval_chain']:
         with st.spinner("Searching and generating answer..."):
             try:
@@ -526,6 +561,16 @@ if st.button("Get Answer", disabled=not api_key) and query:
             
             except Exception as e:
                 st.error(f"Error generating response: {e}")
-                st.error("Please check your API key and try again.")
+                st.error("Please check your Azure OpenAI configuration and try again.")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
+
+# Display configuration status
+if config_complete:
+    st.sidebar.success("✅ Azure OpenAI Configuration Complete")
+    st.sidebar.write("**Current Settings:**")
+    st.sidebar.write(f"- Endpoint: {azure_endpoint}")
+    st.sidebar.write(f"- Deployment: {deployment_name}")
+    st.sidebar.write(f"- API Version: {api_version}")
+else:
+    st.sidebar.warning("⚠️ Azure OpenAI Configuration Incomplete")
