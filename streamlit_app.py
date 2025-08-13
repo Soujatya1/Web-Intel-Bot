@@ -491,7 +491,7 @@ if not st.session_state['docs_loaded']:
                         )
                         st.session_state['llm'] = llm
                         
-                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                        hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                         
                         prompt = ChatPromptTemplate.from_template(
                               """
@@ -513,9 +513,7 @@ if not st.session_state['docs_loaded']:
     FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
     "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
     
-    <context>
-    {context}
-    </context>
+    Context: {context}
     
     Question: {input}
     
@@ -524,9 +522,10 @@ if not st.session_state['docs_loaded']:
                         )
                         
                         text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=1000,
-                            chunk_overlap=100,
+                            chunk_size=800,
+                            chunk_overlap=200,
                             length_function=len,
+                            separators=["\n\n", "\n", ". ", " ", ""]
                         )
                         
                         document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
@@ -534,8 +533,8 @@ if not st.session_state['docs_loaded']:
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        document_chain = LLMChain(llm, prompt)
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 2})
+                        document_chain = create_stuff_documents_chain(llm, prompt)
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
