@@ -5,6 +5,7 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import LLMChain
 from langchain.chains import create_retrieval_chain
 from langchain.schema import Document
 import requests
@@ -533,8 +534,8 @@ if not st.session_state['docs_loaded']:
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        document_chain = create_stuff_documents_chain(llm, prompt)
-                        retriever = st.session_state['vector_db'].as_retriever(search_type = "mmr", search_kwargs={"k": 2})
+                        document_chain = LLMChain(llm, prompt)
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 2})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
