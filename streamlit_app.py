@@ -383,6 +383,42 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
+# Function to display chunks in a user-friendly format
+def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
+    """Display retrieved chunks in an organized and readable format"""
+    st.subheader(f"📋 {title}")
+    
+    for i, chunk in enumerate(chunks[:3], 1):  # Show only top 3 chunks
+        with st.expander(f"Chunk {i} - Source: {chunk.metadata.get('source', 'Unknown')}"):
+            # Display chunk content
+            st.markdown("**Content:**")
+            content = chunk.page_content.strip()
+            if len(content) > 1000:
+                st.text_area(f"Chunk {i} Content", content[:1000] + "...", height=200, disabled=True)
+                st.info(f"Content truncated for display. Full length: {len(content)} characters")
+            else:
+                st.text_area(f"Chunk {i} Content", content, height=min(200, max(100, len(content)//5)), disabled=True)
+            
+            # Display metadata
+            st.markdown("**Metadata:**")
+            metadata = chunk.metadata
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**Source:** {metadata.get('source', 'N/A')}")
+            
+            with col2:
+                st.write(f"**Chunk Length:** {len(content)} characters")
+            
+            # Show first few lines as preview
+            lines = content.split('\n')[:5]
+            preview = '\n'.join(lines)
+            if len(lines) >= 5:
+                preview += "\n..."
+            
+            st.markdown("**Preview (first 5 lines):**")
+            st.code(preview, language="text")
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -511,6 +547,9 @@ if not st.session_state['docs_loaded']:
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
+# Add checkbox to show/hide chunks
+show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
+
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
@@ -521,6 +560,14 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
+                
+                # Display the retrieved chunks if checkbox is selected
+                if show_chunks and 'context' in response:
+                    retrieved_docs = response['context']
+                    if retrieved_docs:
+                        display_chunks(retrieved_docs, "Top 3 Chunks Used for Answer Generation")
+                    else:
+                        st.info("No chunks were retrieved for this query.")
                 
                 if not is_fallback_response(response['answer']):
                     retrieved_docs = response.get('context', [])
