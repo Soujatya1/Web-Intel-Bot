@@ -487,8 +487,8 @@ if not st.session_state['docs_loaded']:
                         )
                         
                         text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=1500,
-                            chunk_overlap=200,
+                            chunk_size=1000,
+                            chunk_overlap=100,
                             length_function=len,
                         )
                         
