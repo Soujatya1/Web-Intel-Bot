@@ -463,7 +463,7 @@ if not st.session_state['docs_loaded']:
     Answer the question based ONLY on the provided context information.
     
     IMPORTANT INSTRUCTIONS:
-    - Answer questions using the provided context from the regulatory websites
+    - Answer questions using the provided context from the websites
     - Pay special attention to dates, recent updates, and chronological information
     - When asked about "what's new" or recent developments, focus on the most recent information available
     - Look for press releases, circulars, guidelines, and policy updates
@@ -472,11 +472,6 @@ if not st.session_state['docs_loaded']:
     - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
     - When mentioning any acts, circulars, or regulations, try to reference the available document links
     - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
-
-    RESPONSE APPROACH:
-    - If the provided context contains information that can help answer the user's question (even partially), use that information to provide a helpful response
-    - Only use the fallback response below if the context is completely unrelated to the question and contains no relevant information whatsoever
-    - Even if you can only provide partial information or related information, do so rather than using the fallback
     
     FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
     "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
