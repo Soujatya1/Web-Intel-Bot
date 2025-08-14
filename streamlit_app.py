@@ -14,6 +14,7 @@ import time
 import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
+from sklearn.metrics.pairwise import cosine_similarity
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://irdai.gov.in/home",
@@ -60,6 +61,66 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://enforcementdirectorate.gov.in/bsa",
                       "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
                       ]
+
+RELEVANCE_SCORE_THRESHOLD = 0.3
+
+def relevance_score(query, document, embeddings):
+    query_embedding = embeddings.embed_query(query)
+    document_embedding = embeddings.embed_documents([document.page_content])[0]
+    similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+    
+    keywords = query.lower().split()
+    keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+    keyword_bonus = keyword_matches * 0.1
+    
+    return similarity + keyword_bonus
+
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+        
+    scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+    
+    scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+    
+    if not scored_docs:
+        return []
+    
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+    
+    top_doc_source = scored_docs[0][0].metadata.get("source", "")
+    
+    source_groups = {}
+    for doc, score in scored_docs:
+        source = doc.metadata.get("source", "")
+        if source not in source_groups:
+            source_groups[source] = []
+        source_groups[source].append((doc, score))
+    
+    final_ranked_docs = []
+    if top_doc_source in source_groups:
+        top_source_docs = sorted(
+            source_groups[top_doc_source], 
+            key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+        )
+        final_ranked_docs.extend([doc for doc, score in top_source_docs])
+        del source_groups[top_doc_source]
+    
+    other_sources = []
+    for source, docs in source_groups.items():
+        avg_source_score = sum(score for _, score in docs) / len(docs)
+        other_sources.append((source, avg_source_score, docs))
+    
+    other_sources.sort(key=lambda x: x[1], reverse=True)
+    
+    for source, avg_score, docs in other_sources:
+        sorted_docs = sorted(
+            docs, 
+            key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+        )
+        final_ranked_docs.extend([doc for doc, score in sorted_docs])
+    
+    return final_ranked_docs
 
 def smart_document_filter(document_links, query, ai_response, max_docs=2):
 
@@ -556,21 +617,76 @@ if st.button("Get Answer", disabled=not config_complete) and query:
     elif st.session_state['retrieval_chain']:
         with st.spinner("Searching and generating answer..."):
             try:
-                response = st.session_state['retrieval_chain'].invoke({"input": query})
+                # Get initial retrieval results
+                retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})  # Retrieve more initially
+                initial_docs = retriever.get_relevant_documents(query)
+                
+                # Re-rank the retrieved documents
+                hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                ranked_docs = re_rank_documents(query, initial_docs, hf_embedding)
+                
+                # Use top 6 re-ranked documents for final answer generation
+                final_docs = ranked_docs[:6]
+                
+                # Generate answer using re-ranked documents
+                prompt = ChatPromptTemplate.from_template(
+                      """
+    You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
+    
+    Answer the question based ONLY on the provided context information.
+    
+    IMPORTANT INSTRUCTIONS:
+    - Answer questions using the provided context from the websites
+    - Pay special attention to dates, recent updates, and chronological information
+    - When asked about "what's new" or recent developments, focus on the most recent information available
+    - Look for press releases, circulars, guidelines, and policy updates
+    - Provide specific details about new regulations, policy changes, or announcements
+    - If you find dated information, mention the specific dates
+    - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
+    - When mentioning any acts, circulars, or regulations, try to reference the available document links
+    - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+    
+    FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
+    "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+    
+    Context: {context}
+    
+    Question: {input}
+    
+    Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
+    """
+                )
+                
+                document_chain = create_stuff_documents_chain(st.session_state['llm'], prompt)
+                
+                # Format context for the prompt
+                context = "\n\n".join([doc.page_content for doc in final_docs])
+                
+                # Generate response
+                response_text = document_chain.invoke({
+                    "context": context,
+                    "input": query
+                })
+                
+                # Create response structure similar to retrieval chain
+                response = {
+                    "answer": response_text,
+                    "context": final_docs
+                }
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
                 
-                # Display the retrieved chunks if checkbox is selected
-                if show_chunks and 'context' in response:
-                    retrieved_docs = response['context']
-                    if retrieved_docs:
-                        display_chunks(retrieved_docs, "Top 3 Chunks Used for Answer Generation")
-                    else:
-                        st.info("No chunks were retrieved for this query.")
+                # Show re-ranking information
+                st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
                 
+                # Display the retrieved chunks if checkbox is selected
+                if show_chunks and final_docs:
+                    display_chunks(final_docs, "Top Re-ranked Chunks Used for Answer Generation")
+                
+                # Rest of the existing code for document links and sources remains the same
                 if not is_fallback_response(response['answer']):
-                    retrieved_docs = response.get('context', [])
+                    retrieved_docs = final_docs
                     
                     all_document_links = []
                     for doc in retrieved_docs:
