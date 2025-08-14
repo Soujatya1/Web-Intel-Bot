@@ -90,15 +90,20 @@ Provide a comprehensive answer using the available context. Be helpful and infor
 """
 
 def relevance_score(query, document, embeddings):
-    query_embedding = embeddings.embed_query(query)
-    document_embedding = embeddings.embed_documents([document.page_content])[0]
-    similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
-    
-    keywords = query.lower().split()
-    keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-    keyword_bonus = keyword_matches * 0.1
-    
-    return similarity + keyword_bonus
+    try:
+        query_embedding = embeddings.embed_query(query)
+        document_embedding = embeddings.embed_documents([document.page_content])[0]
+        similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+        
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+        keyword_bonus = keyword_matches * 0.1
+        
+        return similarity + keyword_bonus
+    except Exception as e:
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+        return keyword_matches * 0.2
 
 def re_rank_documents(query, documents, embeddings):
     if not documents:
