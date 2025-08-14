@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 
+# Constants
 HARDCODED_WEBSITES = [
     "https://irdai.gov.in/acts",
     "https://irdai.gov.in/home",
@@ -90,6 +91,7 @@ Provide a comprehensive answer using the available context. Be helpful and infor
 """
 
 def relevance_score(query, document, embeddings):
+    """Calculate relevance score for re-ranking documents"""
     try:
         query_embedding = embeddings.embed_query(query)
         document_embedding = embeddings.embed_documents([document.page_content])[0]
@@ -101,11 +103,13 @@ def relevance_score(query, document, embeddings):
         
         return similarity + keyword_bonus
     except Exception as e:
+        # Fallback to keyword-based scoring if embedding fails
         keywords = query.lower().split()
         keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-        return keyword_matches * 0.2
+        return keyword_matches * 0.2  # Give reasonable score based on keyword matches
 
 def re_rank_documents(query, documents, embeddings):
+    """Re-rank documents based on relevance scores"""
     if not documents:
         return []
     
@@ -120,7 +124,7 @@ def re_rank_documents(query, documents, embeddings):
         
         if not scored_docs:
             st.warning("No documents passed relevance threshold, using original documents")
-            return documents[:6]
+            return documents[:6]  # Return first 6 if none pass threshold
         
         scored_docs.sort(key=lambda x: x[1], reverse=True)
         
@@ -164,6 +168,7 @@ def re_rank_documents(query, documents, embeddings):
         return documents
 
 def smart_document_filter(document_links, query, ai_response, max_docs=2):
+    """Filter document links based on AI response content"""
     if not document_links:
         return []
     
@@ -249,6 +254,7 @@ def smart_document_filter(document_links, query, ai_response, max_docs=2):
     return [item['doc'] for item in high_confidence_docs[:max_docs]]
 
 def enhanced_web_scrape(url):
+    """Enhanced web scraping with better headers"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -270,6 +276,7 @@ def enhanced_web_scrape(url):
         return None
 
 def extract_document_links(html_content, url):
+    """Extract document links from HTML content"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
     for script in soup(["script", "style"]):
@@ -383,6 +390,7 @@ def extract_document_links(html_content, url):
     return unique_document_links
 
 def extract_structured_content(html_content, url):
+    """Extract structured content from HTML"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
     for script in soup(["script", "style"]):
@@ -411,6 +419,7 @@ def extract_structured_content(html_content, url):
     return clean_text, content_sections
 
 def load_hardcoded_websites():
+    """Load and process all hardcoded websites"""
     loaded_docs = []
     
     for url in HARDCODED_WEBSITES:
@@ -459,6 +468,7 @@ def load_hardcoded_websites():
     return loaded_docs
 
 def is_fallback_response(response_text):
+    """Check if response is a fallback response"""
     fallback_phrases = [
         "fall outside the scope of the data I've been trained on",
         "details you've asked for fall outside the scope",
@@ -469,6 +479,7 @@ def is_fallback_response(response_text):
     return any(phrase in response_text for phrase in fallback_phrases)
 
 def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
+    """Display retrieved chunks with proper formatting"""
     st.subheader(title)
     
     for i, chunk in enumerate(chunks[:3], 1):
@@ -555,6 +566,7 @@ config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
 if not config_complete:
     st.warning("Please fill in all Azure OpenAI configuration fields to proceed.")
 
+# Load websites button
 if not st.session_state['docs_loaded']:
     if st.button("Load Websites", disabled=not config_complete):
         if not config_complete:
@@ -566,6 +578,7 @@ if not st.session_state['docs_loaded']:
             if config_complete and st.session_state['loaded_docs']:
                 with st.spinner("Processing documents..."):
                     try:
+                        # Initialize LLM
                         llm = AzureChatOpenAI(
                             azure_endpoint=azure_endpoint,
                             api_key=api_key,
@@ -576,12 +589,15 @@ if not st.session_state['docs_loaded']:
                         )
                         st.session_state['llm'] = llm
                         
+                        # Initialize embeddings
                         hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                         st.session_state['hf_embedding'] = hf_embedding
                         
+                        # Create and store the prompt template once
                         prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                         st.session_state['prompt'] = prompt
                         
+                        # Split documents
                         text_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=800,
                             chunk_overlap=200,
@@ -607,21 +623,29 @@ if not st.session_state['docs_loaded']:
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
+# Query section
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
 show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
 
+# Process query with single LLM call
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state['vector_db'] and st.session_state['llm']:
         with st.spinner("Searching and generating answer..."):
             try:
+                # Step 1: Retrieve initial documents
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
                 initial_docs = retriever.get_relevant_documents(query)
                 
+                # Step 2: Re-rank documents (only if we have documents)
                 if initial_docs:
+                    # Ensure embeddings are available
+                    if st.session_state['hf_embedding'] is None:
+                        st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                    
                     ranked_docs = re_rank_documents(query, initial_docs, st.session_state['hf_embedding'])
                     final_docs = ranked_docs[:6] if ranked_docs else initial_docs[:6]
                     
@@ -630,7 +654,9 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     final_docs = []
                     st.warning("No documents found for this query.")
                 
+                # Step 3: Single LLM call with re-ranked documents
                 if final_docs:
+                    # Use the stored prompt and LLM for single call
                     document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
                     
                     response_text = document_chain.invoke({
@@ -644,11 +670,14 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     }
                 
                 else:
+                    # Fallback to original retrieval chain if no docs after re-ranking
                     response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
+                # Display response
                 st.subheader("Response:")
                 st.write(response['answer'])
                 
+                # Show chunks if requested
                 if show_chunks and 'context' in response:
                     retrieved_docs = response['context']
                     if retrieved_docs:
@@ -656,9 +685,11 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     else:
                         st.info("No chunks were retrieved for this query.")
                 
+                # Show relevant document links and sources
                 if not is_fallback_response(response['answer']):
                     retrieved_docs = response.get('context', [])
                     
+                    # Extract document links
                     all_document_links = []
                     for doc in retrieved_docs:
                         if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
@@ -681,6 +712,7 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         else:
                             st.info("No high-confidence document links found that directly match the AI response content.")
                     
+                    # Show sources
                     st.write("\n**📍 Information Sources:**")
                     sources = set()
                     for doc in retrieved_docs:
