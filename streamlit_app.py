@@ -621,72 +621,81 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})  # Retrieve more initially
                 initial_docs = retriever.get_relevant_documents(query)
                 
-                # Re-rank the retrieved documents
+                # Re-rank the retrieved documents using the same embeddings as the vector store
                 hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                 ranked_docs = re_rank_documents(query, initial_docs, hf_embedding)
                 
                 # Use top 6 re-ranked documents for final answer generation
                 final_docs = ranked_docs[:6]
                 
-                # Generate answer using re-ranked documents
-                prompt = ChatPromptTemplate.from_template(
-                      """
-    You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
-    
-    Answer the question based ONLY on the provided context information.
-    
-    IMPORTANT INSTRUCTIONS:
-    - Answer questions using the provided context from the websites
-    - Pay special attention to dates, recent updates, and chronological information
-    - When asked about "what's new" or recent developments, focus on the most recent information available
-    - Look for press releases, circulars, guidelines, and policy updates
-    - Provide specific details about new regulations, policy changes, or announcements
-    - If you find dated information, mention the specific dates
-    - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
-    - When mentioning any acts, circulars, or regulations, try to reference the available document links
-    - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
-    
-    FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
-    "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
-    
-    Context: {context}
-    
-    Question: {input}
-    
-    Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
-    """
-                )
-                
-                document_chain = create_stuff_documents_chain(st.session_state['llm'], prompt)
-                
-                # Format context for the prompt
-                context = "\n\n".join([doc.page_content for doc in final_docs])
-                
-                # Generate response
-                response_text = document_chain.invoke({
-                    "context": context,
-                    "input": query
-                })
-                
-                # Create response structure similar to retrieval chain
-                response = {
-                    "answer": response_text,
-                    "context": final_docs
-                }
+                # Use the existing retrieval chain but with custom context
+                if final_docs:
+                    # Create a custom response using the re-ranked documents
+                    prompt = ChatPromptTemplate.from_template(
+                          """
+        You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
+        
+        Answer the question based ONLY on the provided context information.
+        
+        IMPORTANT INSTRUCTIONS:
+        - Answer questions using the provided context from the websites
+        - Pay special attention to dates, recent updates, and chronological information
+        - When asked about "what's new" or recent developments, focus on the most recent information available
+        - Look for press releases, circulars, guidelines, and policy updates
+        - Provide specific details about new regulations, policy changes, or announcements
+        - If you find dated information, mention the specific dates
+        - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
+        - When mentioning any acts, circulars, or regulations, try to reference the available document links
+        - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+        
+        FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
+        "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
+        
+        Context: {context}
+        
+        Question: {input}
+        
+        Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
+        """
+                    )
+                    
+                    document_chain = create_stuff_documents_chain(st.session_state['llm'], prompt)
+                    
+                    # Generate response using re-ranked documents
+                    response_text = document_chain.invoke({
+                        "context": final_docs,
+                        "input": query
+                    })
+                    
+                    # Create response structure
+                    response = {
+                        "answer": response_text,
+                        "context": final_docs
+                    }
+                else:
+                    # Fallback to original retrieval if no documents pass re-ranking
+                    response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
                 
                 # Show re-ranking information
-                st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
+                if final_docs:
+                    st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
+                else:
+                    st.info("⚠️ No documents passed re-ranking threshold, using original retrieval")
                 
                 # Display the retrieved chunks if checkbox is selected
-                if show_chunks and final_docs:
-                    display_chunks(final_docs, "Top Re-ranked Chunks Used for Answer Generation")
+                if show_chunks and 'context' in response:
+                    retrieved_docs = response['context']
+                    if retrieved_docs:
+                        display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
+                    else:
+                        st.info("No chunks were retrieved for this query.")
                 
                 # Rest of the existing code for document links and sources remains the same
                 if not is_fallback_response(response['answer']):
-                    retrieved_docs = final_docs
+                    retrieved_docs = response.get('context', [])
                     
                     all_document_links = []
                     for doc in retrieved_docs:
