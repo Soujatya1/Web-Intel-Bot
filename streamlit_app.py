@@ -5,7 +5,6 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import LLMChain
 from langchain.chains import create_retrieval_chain
 from langchain.schema import Document
 import requests
@@ -16,51 +15,53 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                      "https://irdai.gov.in/home",
-                      "https://irdai.gov.in/rules",
-                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-                      "https://irdai.gov.in/updated-regulations",
-                      "https://irdai.gov.in/notifications",
-                      "https://irdai.gov.in/circulars",
-                      "https://irdai.gov.in/guidelines",
-                      "https://irdai.gov.in/guidelines?p_p_id=com_irdai_document_media_IRDAIDocumentMediaPortlet&p_p_lifecycle=0&p_p_state=normal&p_p_mode=view&_com_irdai_document_media_IRDAIDocumentMediaPortlet_delta=20&_com_irdai_document_media_IRDAIDocumentMediaPortlet_resetCur=false&_com_irdai_document_media_IRDAIDocumentMediaPortlet_cur=2"
-                      "https://irdai.gov.in/orders1",
-                      "https://irdai.gov.in/notices1",
-                      "https://irdai.gov.in/exposure-drafts",
-                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-                      "https://irdai.gov.in/information-under-section-4-1-b-of-rti-act-2005",
-                      "https://irdai.gov.in/information-under-section-4-1-d-of-rti-act-2005",
-                      "https://irdai.gov.in/rti-act",
-                      "https://irdai.gov.in/cic-orders",
-                      "https://irdai.gov.in/rules2",
-                      "https://irdai.gov.in/rti-2005/tenders",
-                      "https://irdai.gov.in/web/guest/faqs1",
-                      "https://irdai.gov.in/other-communication",
-                      "https://irdai.gov.in/antimoney-laundering",
-                      "https://irdai.gov.in/other-communication",
-                      "https://irdai.gov.in/directory-of-employees",
-                      "https://irdai.gov.in/warnings-and-penalties",
-                      "https://uidai.gov.in/en/",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
-                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
-                      "https://enforcementdirectorate.gov.in/pmla",
-                      "https://enforcementdirectorate.gov.in/pmla?page=1",
-                      "https://enforcementdirectorate.gov.in/fema",
-                      "https://enforcementdirectorate.gov.in/fema?page=1",
-                      "https://enforcementdirectorate.gov.in/fema?page=2",
-                      "https://enforcementdirectorate.gov.in/fema?page=3",
-                      "https://enforcementdirectorate.gov.in/bns",
-                      "https://enforcementdirectorate.gov.in/bnss",
-                      "https://enforcementdirectorate.gov.in/bsa",
-                      "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
-                      ]
+HARDCODED_WEBSITES = [
+    "https://irdai.gov.in/acts",
+    "https://irdai.gov.in/home",
+    "https://irdai.gov.in/rules",
+    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+    "https://irdai.gov.in/updated-regulations",
+    "https://irdai.gov.in/notifications",
+    "https://irdai.gov.in/circulars",
+    "https://irdai.gov.in/guidelines",
+    "https://irdai.gov.in/guidelines?p_p_id=com_irdai_document_media_IRDAIDocumentMediaPortlet&p_p_lifecycle=0&p_p_state=normal&p_p_mode=view&_com_irdai_document_media_IRDAIDocumentMediaPortlet_delta=20&_com_irdai_document_media_IRDAIDocumentMediaPortlet_resetCur=false&_com_irdai_document_media_IRDAIDocumentMediaPortlet_cur=2",
+    "https://irdai.gov.in/orders1",
+    "https://irdai.gov.in/notices1",
+    "https://irdai.gov.in/exposure-drafts",
+    "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+    "https://irdai.gov.in/information-under-section-4-1-b-of-rti-act-2005",
+    "https://irdai.gov.in/information-under-section-4-1-d-of-rti-act-2005",
+    "https://irdai.gov.in/rti-act",
+    "https://irdai.gov.in/cic-orders",
+    "https://irdai.gov.in/rules2",
+    "https://irdai.gov.in/rti-2005/tenders",
+    "https://irdai.gov.in/web/guest/faqs1",
+    "https://irdai.gov.in/other-communication",
+    "https://irdai.gov.in/antimoney-laundering",
+    "https://irdai.gov.in/directory-of-employees",
+    "https://irdai.gov.in/warnings-and-penalties",
+    "https://uidai.gov.in/en/",
+    "https://uidai.gov.in/en/about-uidai/legal-framework",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+    "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+    "https://enforcementdirectorate.gov.in/pmla",
+    "https://enforcementdirectorate.gov.in/pmla?page=1",
+    "https://enforcementdirectorate.gov.in/fema",
+    "https://enforcementdirectorate.gov.in/fema?page=1",
+    "https://enforcementdirectorate.gov.in/fema?page=2",
+    "https://enforcementdirectorate.gov.in/fema?page=3",
+    "https://enforcementdirectorate.gov.in/bns",
+    "https://enforcementdirectorate.gov.in/bnss",
+    "https://enforcementdirectorate.gov.in/bsa",
+    "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
+]
+
+RELEVANCE_SCORE_THRESHOLD = 0.3
 
 SYSTEM_PROMPT_TEMPLATE = """
 You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
@@ -87,8 +88,6 @@ Question: {input}
 
 Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
 """
-
-RELEVANCE_SCORE_THRESHOLD = 0.3
 
 def relevance_score(query, document, embeddings):
     query_embedding = embeddings.embed_query(query)
@@ -149,7 +148,6 @@ def re_rank_documents(query, documents, embeddings):
     return final_ranked_docs
 
 def smart_document_filter(document_links, query, ai_response, max_docs=2):
-
     if not document_links:
         return []
     
@@ -233,23 +231,6 @@ def smart_document_filter(document_links, query, ai_response, max_docs=2):
     high_confidence_docs.sort(key=lambda x: x['score'], reverse=True)
     
     return [item['doc'] for item in high_confidence_docs[:max_docs]]
-
-def extract_key_terms(text):
-    stop_words = {
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-        'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
-        'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
-        'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it',
-        'we', 'they', 'me', 'him', 'her', 'us', 'them', 'what', 'when', 'where', 'why',
-        'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some',
-        'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very'
-    }
-    
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text)
-    meaningful_terms = [word.lower() for word in words if word.lower() not in stop_words]
-    
-    term_counts = Counter(meaningful_terms)
-    return [term for term, count in term_counts.most_common(20)]
 
 def enhanced_web_scrape(url):
     try:
@@ -472,7 +453,7 @@ def is_fallback_response(response_text):
     return any(phrase in response_text for phrase in fallback_phrases)
 
 def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
-    #st.subheader(f"title}")
+    st.subheader(title)
     
     for i, chunk in enumerate(chunks[:3], 1):
         with st.expander(f"Chunk {i} - Source: {chunk.metadata.get('source', 'Unknown')}"):
@@ -502,6 +483,7 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
             st.markdown("**Preview (first 5 lines):**")
             st.code(preview, language="text")
 
+# Initialize session state variables
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -512,7 +494,12 @@ if 'llm' not in st.session_state:
     st.session_state['llm'] = None
 if 'docs_loaded' not in st.session_state:
     st.session_state['docs_loaded'] = False
+if 'hf_embedding' not in st.session_state:
+    st.session_state['hf_embedding'] = None
+if 'prompt' not in st.session_state:
+    st.session_state['prompt'] = None
 
+# Streamlit UI
 st.title("Web GEN-ie")
 
 st.subheader("Azure OpenAI Configuration")
@@ -569,13 +556,15 @@ if not st.session_state['docs_loaded']:
                             azure_deployment=deployment_name,
                             api_version=api_version,
                             temperature=0.0,
-                            top_p = 0.1
+                            top_p=0.1
                         )
                         st.session_state['llm'] = llm
                         
                         hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                        st.session_state['hf_embedding'] = hf_embedding
                         
                         prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                        st.session_state['prompt'] = prompt
                         
                         text_splitter = RecursiveCharacterTextSplitter(
                             chunk_size=800,
@@ -587,8 +576,10 @@ if not st.session_state['docs_loaded']:
                         document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
                         st.write(f"Number of chunks created: {len(document_chunks)}")
                         
+                        # Create vector database
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
+                        # Create retrieval chain (kept for fallback purposes)
                         document_chain = create_stuff_documents_chain(llm, prompt)
                         retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
@@ -608,21 +599,23 @@ show_chunks = st.checkbox("Show retrieved chunks used for answer generation", va
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
-    elif st.session_state['retrieval_chain']:
+    elif st.session_state['vector_db'] and st.session_state['llm']:
         with st.spinner("Searching and generating answer..."):
             try:
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
                 initial_docs = retriever.get_relevant_documents(query)
                 
-                hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
-                ranked_docs = re_rank_documents(query, initial_docs, hf_embedding)
-                
-                final_docs = ranked_docs[:6]
+                if initial_docs:
+                    ranked_docs = re_rank_documents(query, initial_docs, st.session_state['hf_embedding'])
+                    final_docs = ranked_docs[:6] if ranked_docs else initial_docs[:6]
+                    
+                    st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
+                else:
+                    final_docs = []
+                    st.warning("No documents found for this query.")
                 
                 if final_docs:
-                    prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                    
-                    document_chain = create_stuff_documents_chain(st.session_state['llm'], prompt)
+                    document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
                     
                     response_text = document_chain.invoke({
                         "context": final_docs,
@@ -633,16 +626,12 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         "answer": response_text,
                         "context": final_docs
                     }
+                
                 else:
                     response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
-                
-                if final_docs:
-                    st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
-                else:
-                    st.info("⚠️ No documents passed re-ranking threshold, using original retrieval")
                 
                 if show_chunks and 'context' in response:
                     retrieved_docs = response['context']
