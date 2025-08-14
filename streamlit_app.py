@@ -472,7 +472,7 @@ def is_fallback_response(response_text):
     return any(phrase in response_text for phrase in fallback_phrases)
 
 def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
-    st.subheader(f"title}")
+    #st.subheader(f"title}")
     
     for i, chunk in enumerate(chunks[:3], 1):
         with st.expander(f"Chunk {i} - Source: {chunk.metadata.get('source', 'Unknown')}"):
