@@ -593,9 +593,23 @@ if not st.session_state['docs_loaded']:
                         hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                         st.session_state['hf_embedding'] = hf_embedding
                         
-                        # Create and store the prompt template once
-                        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                        st.session_state['prompt'] = prompt
+                        # Create and store the prompt template
+                        try:
+                            prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                            st.session_state['prompt'] = prompt
+                            st.success("✅ Prompt template created successfully")
+                        except Exception as prompt_error:
+                            st.error(f"Error creating prompt template: {prompt_error}")
+                            # Create a simple fallback prompt
+                            fallback_template = """Answer the question based on the provided context.
+                            
+Context: {context}
+Question: {input}
+
+Answer:"""
+                            prompt = ChatPromptTemplate.from_template(fallback_template)
+                            st.session_state['prompt'] = prompt
+                            st.warning("Using fallback prompt template")
                         
                         # Split documents
                         text_splitter = RecursiveCharacterTextSplitter(
@@ -612,7 +626,7 @@ if not st.session_state['docs_loaded']:
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         # Create retrieval chain (kept for fallback purposes)
-                        document_chain = create_stuff_documents_chain(llm, prompt)
+                        document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
                         retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
@@ -633,9 +647,19 @@ show_chunks = st.checkbox("Show retrieved chunks used for answer generation", va
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
-    elif st.session_state['vector_db'] and st.session_state['llm']:
+    elif st.session_state.get('vector_db') and st.session_state.get('llm'):
         with st.spinner("Searching and generating answer..."):
             try:
+                # Ensure all required components are available
+                if st.session_state.get('hf_embedding') is None:
+                    st.info("Initializing embeddings...")
+                    st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                
+                if st.session_state.get('prompt') is None:
+                    st.info("Creating prompt template...")
+                    prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                    st.session_state['prompt'] = prompt
+                
                 # Step 1: Retrieve initial documents
                 retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
                 initial_docs = retriever.get_relevant_documents(query)
@@ -656,6 +680,11 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 
                 # Step 3: Single LLM call with re-ranked documents
                 if final_docs:
+                    # Ensure prompt is available
+                    if st.session_state['prompt'] is None:
+                        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                        st.session_state['prompt'] = prompt
+                    
                     # Use the stored prompt and LLM for single call
                     document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
                     
@@ -671,7 +700,11 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 
                 else:
                     # Fallback to original retrieval chain if no docs after re-ranking
-                    response = st.session_state['retrieval_chain'].invoke({"input": query})
+                    if st.session_state.get('retrieval_chain'):
+                        response = st.session_state['retrieval_chain'].invoke({"input": query})
+                    else:
+                        st.error("No retrieval system available. Please reload the websites.")
+                        st.stop()
                 
                 # Display response
                 st.subheader("Response:")
@@ -727,5 +760,11 @@ if st.button("Get Answer", disabled=not config_complete) and query:
             except Exception as e:
                 st.error(f"Error generating response: {e}")
                 st.error("Please check your Azure OpenAI configuration and try again.")
+                # Show debug info
+                st.error("Debug Info:")
+                st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
+                st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
+                st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
+                st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
