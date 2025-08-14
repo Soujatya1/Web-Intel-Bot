@@ -108,49 +108,60 @@ def relevance_score(query, document, embeddings):
 def re_rank_documents(query, documents, embeddings):
     if not documents:
         return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
         
-    scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
-    
-    scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
-    
-    if not scored_docs:
-        return []
-    
-    scored_docs.sort(key=lambda x: x[1], reverse=True)
-    
-    top_doc_source = scored_docs[0][0].metadata.get("source", "")
-    
-    source_groups = {}
-    for doc, score in scored_docs:
-        source = doc.metadata.get("source", "")
-        if source not in source_groups:
-            source_groups[source] = []
-        source_groups[source].append((doc, score))
-    
-    final_ranked_docs = []
-    if top_doc_source in source_groups:
-        top_source_docs = sorted(
-            source_groups[top_doc_source], 
-            key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-        )
-        final_ranked_docs.extend([doc for doc, score in top_source_docs])
-        del source_groups[top_doc_source]
-    
-    other_sources = []
-    for source, docs in source_groups.items():
-        avg_source_score = sum(score for _, score in docs) / len(docs)
-        other_sources.append((source, avg_source_score, docs))
-    
-    other_sources.sort(key=lambda x: x[1], reverse=True)
-    
-    for source, avg_score, docs in other_sources:
-        sorted_docs = sorted(
-            docs, 
-            key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-        )
-        final_ranked_docs.extend([doc for doc, score in sorted_docs])
-    
-    return final_ranked_docs
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
 
 def smart_document_filter(document_links, query, ai_response, max_docs=2):
     if not document_links:
