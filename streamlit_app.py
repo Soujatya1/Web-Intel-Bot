@@ -574,7 +574,7 @@ if not st.session_state['docs_loaded']:
                         )
                         st.session_state['llm'] = llm
                         
-                        hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-miniLM-L6-v2")
                         st.session_state['hf_embedding'] = hf_embedding
                         
                         try:
