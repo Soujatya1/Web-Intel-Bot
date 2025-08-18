@@ -61,8 +61,6 @@ HARDCODED_WEBSITES = [
     "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
 ]
 
-RELEVANCE_SCORE_THRESHOLD = 0.3
-
 SYSTEM_PROMPT_TEMPLATE = """
 You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
 
@@ -89,8 +87,9 @@ Question: {input}
 Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
 """
 
+RELEVANCE_SCORE_THRESHOLD = 0.3
+
 def relevance_score(query, document, embeddings):
-    """Calculate relevance score for re-ranking documents"""
     try:
         query_embedding = embeddings.embed_query(query)
         document_embedding = embeddings.embed_documents([document.page_content])[0]
@@ -107,7 +106,6 @@ def relevance_score(query, document, embeddings):
         return keyword_matches * 0.2
 
 def re_rank_documents(query, documents, embeddings):
-    """Re-rank documents based on relevance scores"""
     if not documents:
         return []
     
@@ -582,7 +580,7 @@ if not st.session_state['docs_loaded']:
                         try:
                             prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                             st.session_state['prompt'] = prompt
-                            st.success("✅ Prompt template created successfully")
+                            st.success("Prompt template created successfully")
                         except Exception as prompt_error:
                             st.error(f"Error creating prompt template: {prompt_error}")
                             fallback_template = """Answer the question based on the provided context.
