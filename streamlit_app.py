@@ -32,8 +32,9 @@ IMPORTANT INSTRUCTIONS:
 - Provide specific details about new regulations, policy changes, or announcements
 - If you find dated information, mention the specific dates
 - When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
-- When mentioning any acts, circulars, or regulations, try to reference the available document links
+- When mentioning any acts, circulars, or regulations, try to reference the available document links that are provided in the context
 - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+- Use the document links provided in the context to give more comprehensive answers with proper references
 
 FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
 "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
@@ -42,7 +43,7 @@ Context: {context}
 
 Question: {input}
 
-Provide a comprehensive answer using the available context. Be helpful and informative even if the context only partially addresses the question.
+Provide a comprehensive answer using the available context, including relevant document links when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
 RELEVANCE_SCORE_THRESHOLD = 0.3
@@ -120,91 +121,6 @@ def re_rank_documents(query, documents, embeddings):
         st.error(f"Error in re-ranking documents: {e}")
         st.warning("Falling back to original document order")
         return documents
-
-def smart_document_filter(document_links, query, ai_response, max_docs=2):
-    if not document_links:
-        return []
-    
-    ai_response_lower = ai_response.lower()
-    ai_response_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', ai_response_lower))
-    
-    mentioned_acts = re.findall(r'\b[\w\s]*act[\w\s]*\b', ai_response_lower)
-    mentioned_regulations = re.findall(r'\b[\w\s]*regulation[\w\s]*\b', ai_response_lower)
-    mentioned_circulars = re.findall(r'\b[\w\s]*circular[\w\s]*\b', ai_response_lower)
-    mentioned_guidelines = re.findall(r'\b[\w\s]*guideline[\w\s]*\b', ai_response_lower)
-    mentioned_amendments = re.findall(r'\b[\w\s]*amendment[\w\s]*\b', ai_response_lower)
-    
-    specific_mentions = (mentioned_acts + mentioned_regulations + mentioned_circulars + 
-                        mentioned_guidelines + mentioned_amendments)
-    
-    mentioned_years = set(re.findall(r'\b(20\d{2})\b', ai_response))
-    
-    high_confidence_docs = []
-    
-    for doc in document_links:
-        title = doc.get('title', '').strip()
-        title_lower = title.lower()
-        
-        if (len(title) < 10 or 
-            title.lower() in ['click here', 'read more', 'download', 'view more', 'see all'] or
-            any(skip_word in title.lower() for skip_word in ['home', 'contact', 'about us', 'sitemap'])):
-            continue
-        
-        confidence_score = 0
-        match_reasons = []
-        
-        for mention in specific_mentions:
-            mention_clean = mention.strip()
-            if len(mention_clean) > 5 and mention_clean in title_lower:
-                confidence_score += 50
-                match_reasons.append(f"Exact mention: '{mention_clean}'")
-        
-        title_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', title_lower))
-        common_words = ai_response_words.intersection(title_words)
-        
-        stop_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'doe', 'end', 'few', 'got', 'let', 'man', 'new', 'put', 'say', 'she', 'too', 'use'}
-        meaningful_common_words = common_words - stop_words
-        
-        if len(meaningful_common_words) >= 3:
-            confidence_score += 30
-            match_reasons.append(f"Multiple key terms: {list(meaningful_common_words)[:3]}")
-        
-        if mentioned_years:
-            title_years = set(re.findall(r'\b(20\d{2})\b', title))
-            if mentioned_years.intersection(title_years):
-                confidence_score += 20
-                match_reasons.append(f"Year match: {mentioned_years.intersection(title_years)}")
-        
-        regulatory_types = ['act', 'regulation', 'circular', 'guideline', 'amendment', 'notification', 'policy', 'rule', 'framework', 'directive']
-        ai_mentions_reg_type = any(reg_type in ai_response_lower for reg_type in regulatory_types)
-        title_has_reg_type = any(reg_type in title_lower for reg_type in regulatory_types)
-        
-        if ai_mentions_reg_type and title_has_reg_type:
-            matching_reg_types = [reg_type for reg_type in regulatory_types 
-                                if reg_type in ai_response_lower and reg_type in title_lower]
-            if matching_reg_types:
-                confidence_score += 25
-                match_reasons.append(f"Regulatory type match: {matching_reg_types}")
-        
-        domain_terms = ['insurance', 'aadhaar', 'uidai', 'irdai', 'pmla', 'licensing', 'compliance']
-        ai_domain_terms = [term for term in domain_terms if term in ai_response_lower]
-        title_domain_terms = [term for term in domain_terms if term in title_lower]
-        
-        matching_domain_terms = set(ai_domain_terms).intersection(set(title_domain_terms))
-        if matching_domain_terms:
-            confidence_score += 20
-            match_reasons.append(f"Domain terms: {list(matching_domain_terms)}")
-        
-        if confidence_score >= 60:
-            high_confidence_docs.append({
-                'doc': doc,
-                'score': confidence_score,
-                'reasons': match_reasons
-            })
-    
-    high_confidence_docs.sort(key=lambda x: x['score'], reverse=True)
-    
-    return [item['doc'] for item in high_confidence_docs[:max_docs]]
 
 def enhanced_web_scrape(url):
     try:
@@ -340,6 +256,30 @@ def extract_document_links(html_content, url):
     
     return unique_document_links
 
+def format_document_links_for_embedding(document_links):
+    """Format document links as structured text to be embedded with content"""
+    if not document_links:
+        return ""
+    
+    formatted_links = "\n\n=== RELEVANT DOCUMENT LINKS ===\n"
+    
+    content_docs = [link for link in document_links if link['type'] == 'content']
+    ref_docs = [link for link in document_links if link['type'] == 'reference']
+    
+    if content_docs:
+        formatted_links += "\n[CONTENT PAGES]\n"
+        for i, link_info in enumerate(content_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
+    
+    if ref_docs:
+        formatted_links += "\n[REFERENCE DOCUMENTS]\n"
+        for i, link_info in enumerate(ref_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
+    
+    formatted_links += "=== END DOCUMENT LINKS ===\n\n"
+    
+    return formatted_links
+
 def extract_structured_content(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
     
@@ -348,6 +288,7 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
+    # Extract news sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -359,14 +300,20 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
+    # Extract document links
     content_sections['document_links'] = extract_document_links(html_content, url)
     
+    # Extract main text
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
     
-    return clean_text, content_sections
+    # Embed document links into the text content
+    formatted_links = format_document_links_for_embedding(content_sections['document_links'])
+    enhanced_text = clean_text + formatted_links
+    
+    return enhanced_text, content_sections
 
 def load_hardcoded_websites():
     loaded_docs = []
@@ -377,122 +324,52 @@ def load_hardcoded_websites():
             
             html_content = enhanced_web_scrape(url)
             if html_content:
-                clean_text, sections = extract_structured_content(html_content, url)
+                enhanced_text, sections = extract_structured_content(html_content, url)
                 
-                # Create comprehensive metadata
-                enhanced_metadata = {
-                    "source": url,
-                    "sections": sections,
-                    # Add individual components for easier access
-                    "document_links": sections.get('document_links', []),
-                    "news_updates": sections.get('news', []),
-                    "total_links": len(sections.get('document_links', [])),
-                    "content_length": len(clean_text),
-                    "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
+                # Create document with enhanced text that includes embedded document links
                 doc = Document(
-                    page_content=clean_text,
-                    metadata=enhanced_metadata
+                    page_content=enhanced_text,
+                    metadata={
+                        "source": url, 
+                        "sections": sections,
+                        "document_links": sections.get('document_links', []),
+                        "has_embedded_links": True
+                    }
                 )
                 loaded_docs.append(doc)
                 
-                # Display enhanced metadata info
-                with st.expander(f"Enhanced Metadata from {url}"):
-                    st.write(f"**Total document links:** {enhanced_metadata['total_links']}")
-                    st.write(f"**Content length:** {enhanced_metadata['content_length']} characters")
-                    st.write(f"**Scraped at:** {enhanced_metadata['scraped_at']}")
-                    
-                    if enhanced_metadata['document_links']:
-                        st.write("**Document links (will be preserved in chunks):**")
-                        for i, link_info in enumerate(enhanced_metadata['document_links'][:5]):
-                            st.write(f"{i+1}. {link_info['title']}")
+                if sections.get('news'):
+                    with st.expander(f"News/Updates found from {url}"):
+                        for i, news_item in enumerate(sections['news'][:3]):
+                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
+                
+                if sections.get('document_links'):
+                    with st.expander(f"Document Links found from {url}"):
+                        st.write(f"**Total document links found:** {len(sections['document_links'])}")
+                        
+                        content_docs = [link for link in sections['document_links'] if link['type'] == 'content']
+                        ref_docs = [link for link in sections['document_links'] if link['type'] == 'reference']
+                        
+                        if content_docs:
+                            st.write("**Content Pages:**")
+                            for i, link_info in enumerate(content_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        if ref_docs:
+                            st.write("**Reference Documents:**")
+                            for i, link_info in enumerate(ref_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        st.success(f"✅ Document links have been embedded into the text content for better retrieval")
+                else:
+                    st.write(f"No relevant document links found from {url}")
             
-            st.success(f"Successfully loaded content with enhanced metadata from {url}")
+            st.success(f"Successfully loaded content from {url}")
             
         except Exception as e:
             st.error(f"Error loading {url}: {e}")
     
     return loaded_docs
-
-def create_enhanced_chunks_with_metadata(documents):
-    """Create chunks while preserving and enhancing metadata for each chunk"""
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=200,
-        length_function=len,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-    
-    enhanced_chunks = []
-    
-    for doc in documents:
-        # Split the document into chunks
-        chunks = text_splitter.split_documents([doc])
-        
-        # Enhance each chunk with preserved and additional metadata
-        for i, chunk in enumerate(chunks):
-            # Preserve original metadata
-            enhanced_metadata = chunk.metadata.copy()
-            
-            # Add chunk-specific metadata
-            enhanced_metadata.update({
-                "chunk_index": i,
-                "total_chunks_from_source": len(chunks),
-                "chunk_size": len(chunk.page_content),
-                "chunk_start_preview": chunk.page_content[:100] + "..." if len(chunk.page_content) > 100 else chunk.page_content,
-                
-                # Preserve document links in each chunk
-                "document_links": doc.metadata.get('document_links', []),
-                "available_links_count": len(doc.metadata.get('document_links', [])),
-                
-                # Add parent document info
-                "parent_source": doc.metadata.get('source', ''),
-                "parent_content_length": doc.metadata.get('content_length', 0),
-                
-                # Add searchable keywords from links
-                "link_keywords": extract_keywords_from_links(doc.metadata.get('document_links', [])),
-                
-                # Add chunk classification
-                "chunk_type": classify_chunk_content(chunk.page_content)
-            })
-            
-            chunk.metadata = enhanced_metadata
-            enhanced_chunks.append(chunk)
-    
-    return enhanced_chunks
-
-def extract_keywords_from_links(document_links):
-    """Extract searchable keywords from document links"""
-    keywords = set()
-    
-    for link in document_links:
-        title = link.get('title', '').lower()
-        # Extract meaningful words (3+ characters, not common stop words)
-        words = re.findall(r'\b[a-zA-Z]{3,}\b', title)
-        stop_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who'}
-        meaningful_words = [word for word in words if word not in stop_words]
-        keywords.update(meaningful_words)
-    
-    return list(keywords)
-
-def classify_chunk_content(content):
-    """Classify chunk content type based on keywords"""
-    content_lower = content.lower()
-    
-    if any(word in content_lower for word in ['act', 'section', 'subsection', 'amendment']):
-        return 'legal_document'
-    elif any(word in content_lower for word in ['circular', 'notification', 'guideline']):
-        return 'regulatory_guidance'
-    elif any(word in content_lower for word in ['news', 'update', 'recent', 'latest']):
-        return 'news_update'
-    elif any(word in content_lower for word in ['insurance', 'policy', 'premium']):
-        return 'insurance_content'
-    elif any(word in content_lower for word in ['aadhaar', 'uidai', 'authentication']):
-        return 'aadhaar_content'
-    else:
-        return 'general_content'
 
 def is_fallback_response(response_text):
     fallback_phrases = [
@@ -511,11 +388,31 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
         with st.expander(f"Chunk {i} - Source: {chunk.metadata.get('source', 'Unknown')}"):
             st.markdown("**Content:**")
             content = chunk.page_content.strip()
-            if len(content) > 1000:
-                st.text_area(f"Chunk {i} Content", content[:1000] + "...", height=200, disabled=True)
-                st.info(f"Content truncated for display. Full length: {len(content)} characters")
+            
+            # Check if this chunk has embedded document links
+            has_embedded_links = "=== RELEVANT DOCUMENT LINKS ===" in content
+            
+            if has_embedded_links:
+                # Split content and links for better display
+                text_part, links_part = content.split("=== RELEVANT DOCUMENT LINKS ===", 1)
+                
+                st.markdown("**Main Content:**")
+                if len(text_part) > 1000:
+                    st.text_area(f"Chunk {i} Main Content", text_part[:1000] + "...", height=200, disabled=True)
+                    st.info(f"Content truncated for display. Full length: {len(text_part)} characters")
+                else:
+                    st.text_area(f"Chunk {i} Main Content", text_part, height=min(200, max(100, len(text_part)//5)), disabled=True)
+                
+                st.markdown("**Embedded Document Links:**")
+                links_clean = links_part.replace("=== END DOCUMENT LINKS ===", "").strip()
+                st.code(links_clean, language="text")
+                
             else:
-                st.text_area(f"Chunk {i} Content", content, height=min(200, max(100, len(content)//5)), disabled=True)
+                if len(content) > 1000:
+                    st.text_area(f"Chunk {i} Content", content[:1000] + "...", height=200, disabled=True)
+                    st.info(f"Content truncated for display. Full length: {len(content)} characters")
+                else:
+                    st.text_area(f"Chunk {i} Content", content, height=min(200, max(100, len(content)//5)), disabled=True)
             
             st.markdown("**Metadata:**")
             metadata = chunk.metadata
@@ -523,18 +420,13 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
             
             with col1:
                 st.write(f"**Source:** {metadata.get('source', 'N/A')}")
+                st.write(f"**Has Embedded Links:** {metadata.get('has_embedded_links', False)}")
             
             with col2:
                 st.write(f"**Chunk Length:** {len(content)} characters")
-            
-            lines = content.split('\n')[:5]
-            preview = '\n'.join(lines)
-            if len(lines) >= 5:
-                preview += "\n..."
-            
-            st.markdown("**Preview (first 5 lines):**")
-            st.code(preview, language="text")
+                st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
 
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -598,7 +490,7 @@ if not st.session_state['docs_loaded']:
             st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
             
             if config_complete and st.session_state['loaded_docs']:
-                with st.spinner("Processing documents..."):
+                with st.spinner("Processing documents with embedded links..."):
                     try:
                         llm = AzureChatOpenAI(
                             azure_endpoint=azure_endpoint,
@@ -630,14 +522,19 @@ Answer:"""
                             st.warning("Using fallback prompt template")
                         
                         text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=800,
-                            chunk_overlap=200,
+                            chunk_size=1200,  # Increased chunk size to accommodate embedded links
+                            chunk_overlap=300,  # Increased overlap to ensure link continuity
                             length_function=len,
                             separators=["\n\n", "\n", ". ", " ", ""]
                         )
                         
                         document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
                         st.write(f"Number of chunks created: {len(document_chunks)}")
+                        
+                        # Count chunks with embedded links
+                        chunks_with_links = sum(1 for chunk in document_chunks 
+                                              if "=== RELEVANT DOCUMENT LINKS ===" in chunk.page_content)
+                        st.info(f"✅ {chunks_with_links} chunks contain embedded document links")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
@@ -646,7 +543,7 @@ Answer:"""
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("Documents processed and ready for querying!")
+                        st.success("Documents processed with embedded links and ready for querying!")
                     
                     except Exception as e:
                         st.error(f"Error initializing Azure OpenAI: {e}")
@@ -672,43 +569,8 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                     st.session_state['prompt'] = prompt
                 
-                retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
-                initial_docs = retriever.get_relevant_documents(query)
-                
-                if initial_docs:
-                    if st.session_state['hf_embedding'] is None:
-                        st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
-                    
-                    ranked_docs = re_rank_documents(query, initial_docs, st.session_state['hf_embedding'])
-                    final_docs = ranked_docs[:6] if ranked_docs else initial_docs[:6]
-                    
-                    st.info(f"🔄 Re-ranked {len(initial_docs)} initial documents to {len(final_docs)} most relevant documents")
-                else:
-                    final_docs = []
-                    st.warning("No documents found for this query.")
-                
-                if final_docs:
-                    if st.session_state['prompt'] is None:
-                        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                        st.session_state['prompt'] = prompt
-                    
-                    document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-                    response_text = document_chain.invoke({
-                        "context": final_docs,
-                        "input": query
-                    })
-                    
-                    response = {
-                        "answer": response_text,
-                        "context": final_docs
-                    }
-                
-                else:
-                    if st.session_state.get('retrieval_chain'):
-                        response = st.session_state['retrieval_chain'].invoke({"input": query})
-                    else:
-                        st.error("No retrieval system available. Please reload the websites.")
-                        st.stop()
+                # Use the retrieval chain directly - it now includes embedded document links
+                response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
@@ -717,36 +579,25 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     retrieved_docs = response['context']
                     if retrieved_docs:
                         display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
+                        
+                        # Show summary of embedded links used
+                        links_used = 0
+                        for doc in retrieved_docs:
+                            if "=== RELEVANT DOCUMENT LINKS ===" in doc.page_content:
+                                links_used += 1
+                        
+                        if links_used > 0:
+                            st.success(f"✅ {links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
+                        else:
+                            st.info("ℹ️ No chunks with embedded document links were retrieved for this query")
                     else:
                         st.info("No chunks were retrieved for this query.")
                 
+                # Show information sources
                 if not is_fallback_response(response['answer']):
-                    retrieved_docs = response.get('context', [])
-                    
-                    all_document_links = []
-                    for doc in retrieved_docs:
-                        if 'sections' in doc.metadata and 'document_links' in doc.metadata['sections']:
-                            for link_info in doc.metadata['sections']['document_links']:
-                                if link_info not in all_document_links:
-                                    all_document_links.append(link_info)
-                    
-                    if all_document_links:
-                        relevant_docs = smart_document_filter(
-                            all_document_links, 
-                            query, 
-                            response['answer'], 
-                            max_docs=3
-                        )
-                        
-                        if relevant_docs:
-                            st.write("\n**📄 Relevant Document Links**")
-                            for i, link_info in enumerate(relevant_docs):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        else:
-                            st.info("No high-confidence document links found that directly match the AI response content.")
-                    
                     st.write("\n**📍 Information Sources:**")
                     sources = set()
+                    retrieved_docs = response.get('context', [])
                     for doc in retrieved_docs:
                         source = doc.metadata.get('source', 'Unknown')
                         sources.add(source)
