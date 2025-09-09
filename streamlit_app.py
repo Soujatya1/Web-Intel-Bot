@@ -257,7 +257,6 @@ def extract_document_links(html_content, url):
     return unique_document_links
 
 def format_document_links_for_embedding(document_links):
-    """Format document links as structured text to be embedded with content"""
     if not document_links:
         return ""
     
@@ -300,16 +299,13 @@ def extract_structured_content(html_content, url):
             if len(text) > 50:
                 content_sections['news'].append(text)
     
-    # Extract document links
     content_sections['document_links'] = extract_document_links(html_content, url)
     
-    # Extract main text
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
     clean_text = '\n'.join(chunk for chunk in chunks if chunk)
     
-    # Embed document links into the text content
     formatted_links = format_document_links_for_embedding(content_sections['document_links'])
     enhanced_text = clean_text + formatted_links
     
@@ -326,7 +322,6 @@ def load_hardcoded_websites():
             if html_content:
                 enhanced_text, sections = extract_structured_content(html_content, url)
                 
-                # Create document with enhanced text that includes embedded document links
                 doc = Document(
                     page_content=enhanced_text,
                     metadata={
@@ -389,11 +384,9 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
             st.markdown("**Content:**")
             content = chunk.page_content.strip()
             
-            # Check if this chunk has embedded document links
             has_embedded_links = "=== RELEVANT DOCUMENT LINKS ===" in content
             
             if has_embedded_links:
-                # Split content and links for better display
                 text_part, links_part = content.split("=== RELEVANT DOCUMENT LINKS ===", 1)
                 
                 st.markdown("**Main Content:**")
@@ -426,7 +419,6 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
                 st.write(f"**Chunk Length:** {len(content)} characters")
                 st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
 
-# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -522,8 +514,8 @@ Answer:"""
                             st.warning("Using fallback prompt template")
                         
                         text_splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=1200,  # Increased chunk size to accommodate embedded links
-                            chunk_overlap=300,  # Increased overlap to ensure link continuity
+                            chunk_size=1200,
+                            chunk_overlap=300,
                             length_function=len,
                             separators=["\n\n", "\n", ". ", " ", ""]
                         )
@@ -534,7 +526,7 @@ Answer:"""
                         # Count chunks with embedded links
                         chunks_with_links = sum(1 for chunk in document_chunks 
                                               if "=== RELEVANT DOCUMENT LINKS ===" in chunk.page_content)
-                        st.info(f"✅ {chunks_with_links} chunks contain embedded document links")
+                        st.info(f"{chunks_with_links} chunks contain embedded document links")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
@@ -569,7 +561,6 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                     st.session_state['prompt'] = prompt
                 
-                # Use the retrieval chain directly - it now includes embedded document links
                 response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
                 st.subheader("Response:")
@@ -580,20 +571,18 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     if retrieved_docs:
                         display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
                         
-                        # Show summary of embedded links used
                         links_used = 0
                         for doc in retrieved_docs:
                             if "=== RELEVANT DOCUMENT LINKS ===" in doc.page_content:
                                 links_used += 1
                         
                         if links_used > 0:
-                            st.success(f"✅ {links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
                         else:
                             st.info("ℹ️ No chunks with embedded document links were retrieved for this query")
                     else:
                         st.info("No chunks were retrieved for this query.")
                 
-                # Show information sources
                 if not is_fallback_response(response['answer']):
                     st.write("\n**📍 Information Sources:**")
                     sources = set()
