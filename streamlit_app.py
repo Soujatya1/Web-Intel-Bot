@@ -379,42 +379,120 @@ def load_hardcoded_websites():
             if html_content:
                 clean_text, sections = extract_structured_content(html_content, url)
                 
+                # Create comprehensive metadata
+                enhanced_metadata = {
+                    "source": url,
+                    "sections": sections,
+                    # Add individual components for easier access
+                    "document_links": sections.get('document_links', []),
+                    "news_updates": sections.get('news', []),
+                    "total_links": len(sections.get('document_links', [])),
+                    "content_length": len(clean_text),
+                    "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
                 doc = Document(
                     page_content=clean_text,
-                    metadata={"source": url, "sections": sections}
+                    metadata=enhanced_metadata
                 )
                 loaded_docs.append(doc)
                 
-                if sections.get('news'):
-                    with st.expander(f"News/Updates found from {url}"):
-                        for i, news_item in enumerate(sections['news'][:3]):
-                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
-                
-                if sections.get('document_links'):
-                    with st.expander(f"Document Links found from {url}"):
-                        st.write(f"**Total document links found:** {len(sections['document_links'])}")
-                        
-                        content_docs = [link for link in sections['document_links'] if link['type'] == 'content']
-                        ref_docs = [link for link in sections['document_links'] if link['type'] == 'reference']
-                        
-                        if content_docs:
-                            st.write("**Content Pages:**")
-                            for i, link_info in enumerate(content_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                        
-                        if ref_docs:
-                            st.write("**Reference Documents:**")
-                            for i, link_info in enumerate(ref_docs[:10]):
-                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
-                else:
-                    st.write(f"No relevant document links found from {url}")
+                # Display enhanced metadata info
+                with st.expander(f"Enhanced Metadata from {url}"):
+                    st.write(f"**Total document links:** {enhanced_metadata['total_links']}")
+                    st.write(f"**Content length:** {enhanced_metadata['content_length']} characters")
+                    st.write(f"**Scraped at:** {enhanced_metadata['scraped_at']}")
+                    
+                    if enhanced_metadata['document_links']:
+                        st.write("**Document links (will be preserved in chunks):**")
+                        for i, link_info in enumerate(enhanced_metadata['document_links'][:5]):
+                            st.write(f"{i+1}. {link_info['title']}")
             
-            st.success(f"Successfully loaded content from {url}")
+            st.success(f"Successfully loaded content with enhanced metadata from {url}")
             
         except Exception as e:
             st.error(f"Error loading {url}: {e}")
     
     return loaded_docs
+
+def create_enhanced_chunks_with_metadata(documents):
+    """Create chunks while preserving and enhancing metadata for each chunk"""
+    
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=200,
+        length_function=len,
+        separators=["\n\n", "\n", ". ", " ", ""]
+    )
+    
+    enhanced_chunks = []
+    
+    for doc in documents:
+        # Split the document into chunks
+        chunks = text_splitter.split_documents([doc])
+        
+        # Enhance each chunk with preserved and additional metadata
+        for i, chunk in enumerate(chunks):
+            # Preserve original metadata
+            enhanced_metadata = chunk.metadata.copy()
+            
+            # Add chunk-specific metadata
+            enhanced_metadata.update({
+                "chunk_index": i,
+                "total_chunks_from_source": len(chunks),
+                "chunk_size": len(chunk.page_content),
+                "chunk_start_preview": chunk.page_content[:100] + "..." if len(chunk.page_content) > 100 else chunk.page_content,
+                
+                # Preserve document links in each chunk
+                "document_links": doc.metadata.get('document_links', []),
+                "available_links_count": len(doc.metadata.get('document_links', [])),
+                
+                # Add parent document info
+                "parent_source": doc.metadata.get('source', ''),
+                "parent_content_length": doc.metadata.get('content_length', 0),
+                
+                # Add searchable keywords from links
+                "link_keywords": extract_keywords_from_links(doc.metadata.get('document_links', [])),
+                
+                # Add chunk classification
+                "chunk_type": classify_chunk_content(chunk.page_content)
+            })
+            
+            chunk.metadata = enhanced_metadata
+            enhanced_chunks.append(chunk)
+    
+    return enhanced_chunks
+
+def extract_keywords_from_links(document_links):
+    """Extract searchable keywords from document links"""
+    keywords = set()
+    
+    for link in document_links:
+        title = link.get('title', '').lower()
+        # Extract meaningful words (3+ characters, not common stop words)
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', title)
+        stop_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who'}
+        meaningful_words = [word for word in words if word not in stop_words]
+        keywords.update(meaningful_words)
+    
+    return list(keywords)
+
+def classify_chunk_content(content):
+    """Classify chunk content type based on keywords"""
+    content_lower = content.lower()
+    
+    if any(word in content_lower for word in ['act', 'section', 'subsection', 'amendment']):
+        return 'legal_document'
+    elif any(word in content_lower for word in ['circular', 'notification', 'guideline']):
+        return 'regulatory_guidance'
+    elif any(word in content_lower for word in ['news', 'update', 'recent', 'latest']):
+        return 'news_update'
+    elif any(word in content_lower for word in ['insurance', 'policy', 'premium']):
+        return 'insurance_content'
+    elif any(word in content_lower for word in ['aadhaar', 'uidai', 'authentication']):
+        return 'aadhaar_content'
+    else:
+        return 'general_content'
 
 def is_fallback_response(response_text):
     fallback_phrases = [
@@ -574,13 +652,6 @@ Answer:"""
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
-def extract_links_from_doc(doc):
-    try:
-        links = doc.metadata['sections']['document_links']
-        return links
-    except KeyError:
-        return []
-
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
@@ -622,9 +693,8 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         st.session_state['prompt'] = prompt
                     
                     document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-                    enhanced_docs = extract_links_from_doc(final_docs)
                     response_text = document_chain.invoke({
-                        "context": enhanced_docs,
+                        "context": final_docs,
                         "input": query
                     })
                     
