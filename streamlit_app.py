@@ -574,6 +574,13 @@ Answer:"""
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
+def extract_links_from_doc(doc):
+    try:
+        links = doc.metadata['sections']['document_links']
+        return links
+    except KeyError:
+        return []
+
 st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
@@ -615,9 +622,9 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         st.session_state['prompt'] = prompt
                     
                     document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-                    
+                    enhanced_docs = extract_links_from_doc(final_docs)
                     response_text = document_chain.invoke({
-                        "context": final_docs,
+                        "context": enhanced_docs,
                         "input": query
                     })
                     
