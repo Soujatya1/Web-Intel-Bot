@@ -80,63 +80,121 @@ def relevance_score(query, document, embeddings):
         keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
         return keyword_matches * 0.2
 
-def re_rank_documents(query, documents, embeddings):
-    if not documents:
-        return []
+class CustomRerankingRetriever(BaseRetriever):
+    def __init__(self, vector_store, embeddings, k=6):
+        self.vector_store = vector_store
+        self.embeddings = embeddings
+        self.k = k
     
-    if embeddings is None:
-        st.warning("Embeddings not available, using original document order")
-        return documents
+    def _get_relevant_documents(self, query: str) -> List[Document]:
+        # Get initial documents from FAISS
+        initial_docs = self.vector_store.similarity_search(query, k=self.k * 2)  # Get more initially
         
-    try:
-        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        # Apply your custom re-ranking
+        ranked_docs = self.re_rank_documents(query, initial_docs, self.embeddings)
         
-        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        # Return top k documents
+        return ranked_docs[:self.k]
+    
+    def re_rank_documents(self, query, documents, embeddings):
+        if not documents:
+            return []
         
-        if not scored_docs:
-            st.warning("No documents passed relevance threshold, using original documents")
-            return documents[:6]
+        if embeddings is None:
+            return documents
         
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        try:
+            # Calculate relevance scores
+            scored_docs = []
+            for doc in documents:
+                score = self.relevance_score(query, doc, embeddings)
+                scored_docs.append((doc, score))
+            
+            # Filter by threshold
+            scored_docs = [(doc, score) for doc, score in scored_docs 
+                          if score >= RELEVANCE_SCORE_THRESHOLD]
+            
+            if not scored_docs:
+                return documents[:self.k]
+            
+            # Sort by score (highest first)
+            scored_docs.sort(key=lambda x: x[1], reverse=True)
+            
+            # Extract documents and enhance with source information
+            ranked_docs = [doc for doc, score in scored_docs]
+            enhanced_docs = self.enhance_chunks_with_links(ranked_docs)
+            
+            return enhanced_docs
+            
+        except Exception as e:
+            print(f"Error in re-ranking: {e}")
+            return documents
+    
+    def relevance_score(self, query, document, embeddings):
+        try:
+            query_embedding = embeddings.embed_query(query)
+            document_embedding = embeddings.embed_documents([document.page_content])[0]
+            similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+            
+            # Improved keyword matching
+            query_words = query.lower().split()
+            doc_content = document.page_content.lower()
+            
+            # Count exact word matches
+            exact_matches = sum(1 for word in query_words if word in doc_content)
+            
+            # Count phrase matches (2-word combinations)
+            phrase_matches = 0
+            for i in range(len(query_words) - 1):
+                phrase = " ".join(query_words[i:i+2])
+                if phrase in doc_content:
+                    phrase_matches += 1
+            
+            # Weight the bonuses more significantly
+            keyword_bonus = exact_matches * 0.2 + phrase_matches * 0.3
+            
+            return similarity + keyword_bonus
+            
+        except Exception as e:
+            # Fallback to keyword matching only
+            query_words = query.lower().split()
+            doc_content = document.page_content.lower()
+            keyword_matches = sum(1 for word in query_words if word in doc_content)
+            return keyword_matches * 0.3
+    
+    def enhance_chunks_with_links(self, chunks):
+        """Add source URL and document links to the first line of each chunk"""
+        enhanced_chunks = []
         
-        top_doc_source = scored_docs[0][0].metadata.get("source", "")
-        
-        source_groups = {}
-        for doc, score in scored_docs:
-            source = doc.metadata.get("source", "")
-            if source not in source_groups:
-                source_groups[source] = []
-            source_groups[source].append((doc, score))
-        
-        final_ranked_docs = []
-        if top_doc_source in source_groups:
-            top_source_docs = sorted(
-                source_groups[top_doc_source], 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+        for chunk in chunks:
+            source_url = chunk.metadata.get('source', 'Unknown')
+            document_links = chunk.metadata.get('document_links', [])
+            
+            # Create source line
+            source_line = f"Source URL: {source_url}"
+            
+            # Add document links if available
+            if document_links:
+                links_text = " | Document Links: "
+                link_titles = []
+                for link in document_links[:3]:
+                    link_titles.append(f"{link['title']} ({link['link']})")
+                links_text += "; ".join(link_titles)
+                if len(document_links) > 3:
+                    links_text += f" and {len(document_links) - 3} more..."
+                source_line += links_text
+            
+            # Add source line to the beginning of chunk content
+            enhanced_content = source_line + "\n\n" + chunk.page_content
+            
+            # Create new chunk with enhanced content
+            enhanced_chunk = Document(
+                page_content=enhanced_content,
+                metadata=chunk.metadata
             )
-            final_ranked_docs.extend([doc for doc, score in top_source_docs])
-            del source_groups[top_doc_source]
+            enhanced_chunks.append(enhanced_chunk)
         
-        other_sources = []
-        for source, docs in source_groups.items():
-            avg_source_score = sum(score for _, score in docs) / len(docs)
-            other_sources.append((source, avg_source_score, docs))
-        
-        other_sources.sort(key=lambda x: x[1], reverse=True)
-        
-        for source, avg_score, docs in other_sources:
-            sorted_docs = sorted(
-                docs, 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in sorted_docs])
-        
-        return final_ranked_docs
-        
-    except Exception as e:
-        st.error(f"Error in re-ranking documents: {e}")
-        st.warning("Falling back to original document order")
-        return documents
+        return enhanced_chunks
 
 def enhanced_web_scrape(url):
     try:
@@ -469,66 +527,6 @@ def enhance_chunks_with_links(chunks):
     
     return enhanced_chunks
 
-def re_rank_documents(query, documents, embeddings):
-    if not documents:
-        return []
-    
-    if embeddings is None:
-        st.warning("Embeddings not available, using original document order")
-        return documents
-        
-    try:
-        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
-        
-        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
-        
-        if not scored_docs:
-            st.warning("No documents passed relevance threshold, using original documents")
-            return documents[:6]
-        
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        top_doc_source = scored_docs[0][0].metadata.get("source", "")
-        
-        source_groups = {}
-        for doc, score in scored_docs:
-            source = doc.metadata.get("source", "")
-            if source not in source_groups:
-                source_groups[source] = []
-            source_groups[source].append((doc, score))
-        
-        final_ranked_docs = []
-        if top_doc_source in source_groups:
-            top_source_docs = sorted(
-                source_groups[top_doc_source], 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in top_source_docs])
-            del source_groups[top_doc_source]
-        
-        other_sources = []
-        for source, docs in source_groups.items():
-            avg_source_score = sum(score for _, score in docs) / len(docs)
-            other_sources.append((source, avg_source_score, docs))
-        
-        other_sources.sort(key=lambda x: x[1], reverse=True)
-        
-        for source, avg_score, docs in other_sources:
-            sorted_docs = sorted(
-                docs, 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in sorted_docs])
-        
-        # Enhance chunks with source URL and document links
-        enhanced_docs = enhance_chunks_with_links(final_ranked_docs)
-        return enhanced_docs
-        
-    except Exception as e:
-        st.error(f"Error in re-ranking documents: {e}")
-        st.warning("Falling back to original document order")
-        return documents
-
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -642,8 +640,12 @@ Answer:"""
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+                        custom_retriever = CustomRerankingRetriever(
+                                        vector_store=st.session_state['vector_db'],
+                                        embeddings=st.session_state['hf_embedding'],
+                                        k=6
+                            )
+                        st.session_state['retrieval_chain'] = create_retrieval_chain(custom_retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
