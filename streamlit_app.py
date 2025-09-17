@@ -37,8 +37,11 @@ You are a website expert assistant specializing in understanding and answering q
 Answer the question based ONLY on the provided context information.
 
 IMPORTANT INSTRUCTIONS:
+- Each chunk in the context starts with "Source URL:" followed by the source website and relevant document links
+- Always reference the source URL provided at the beginning of each chunk in your answers
 - Answer questions using the provided context from the websites
 - Pay special attention to dates, recent updates, and chronological information
+- Always Give response in chronological order according to date.
 - When asked about "what's new" or recent developments, focus on the most recent information available
 - Look for press releases, circulars, guidelines, and policy updates
 - Provide specific details about new regulations, policy changes, or announcements
@@ -47,6 +50,7 @@ IMPORTANT INSTRUCTIONS:
 - When mentioning any acts, circulars, or regulations, try to reference the available document links that are provided in the context
 - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
 - Use the document links provided in the context to give more comprehensive answers with proper references
+- Always include the source URL in your answer for credibility and reference
 
 FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
 "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
@@ -55,7 +59,7 @@ Context: {context}
 
 Question: {input}
 
-Provide a comprehensive answer using the available context, including relevant document links when available. Be helpful and informative even if the context only partially addresses the question.
+Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
 RELEVANCE_SCORE_THRESHOLD = 0.3
@@ -176,8 +180,8 @@ def extract_document_links(html_content, url):
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 'amendment', 
-                           'notification', 'order', 'policy', 'master', 'framework', 'directive',
+        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                           'amendment', 'notification', 'order', 'policy', 'master', 'framework', 'directive',
                            'insurance', 'aadhaar', 'compliance', 'licensing']
         
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
@@ -430,6 +434,100 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
             with col2:
                 st.write(f"**Chunk Length:** {len(content)} characters")
                 st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
+
+def enhance_chunks_with_links(chunks):
+    """Add source URL and document links to the first line of each chunk"""
+    enhanced_chunks = []
+    
+    for chunk in chunks:
+        source_url = chunk.metadata.get('source', 'Unknown')
+        document_links = chunk.metadata.get('document_links', [])
+        
+        # Create source line
+        source_line = f"Source URL: {source_url}"
+        
+        # Add document links if available
+        if document_links:
+            links_text = " | Document Links: "
+            link_titles = []
+            for link in document_links[:3]:  # Limit to first 3 links to avoid too long first line
+                link_titles.append(f"{link['title']} ({link['link']})")
+            links_text += "; ".join(link_titles)
+            if len(document_links) > 3:
+                links_text += f" and {len(document_links) - 3} more..."
+            source_line += links_text
+        
+        # Add source line to the beginning of chunk content
+        enhanced_content = source_line + "\n\n" + chunk.page_content
+        
+        # Create new chunk with enhanced content
+        enhanced_chunk = Document(
+            page_content=enhanced_content,
+            metadata=chunk.metadata
+        )
+        enhanced_chunks.append(enhanced_chunk)
+    
+    return enhanced_chunks
+
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        # Enhance chunks with source URL and document links
+        enhanced_docs = enhance_chunks_with_links(final_ranked_docs)
+        return enhanced_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
 
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
