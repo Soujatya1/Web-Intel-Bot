@@ -181,7 +181,8 @@ def extract_document_links(html_content, url):
             href = urljoin(url, href)
         
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                           'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
+                           'amendment', 'notification', 'order', 'policy', 'master', 'framework', 'directive',
+                           'insurance', 'aadhaar', 'compliance', 'licensing']
         
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
@@ -282,13 +283,13 @@ def format_document_links_for_embedding(document_links):
     
     if content_docs:
         formatted_links += "\n[CONTENT PAGES]\n"
-        for i, link_info in enumerate(content_docs[:10]):
-            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(content_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
     
     if ref_docs:
         formatted_links += "\n[REFERENCE DOCUMENTS]\n"
-        for i, link_info in enumerate(ref_docs[:10]):
-            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(ref_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
     
     formatted_links += "=== END DOCUMENT LINKS ===\n\n"
     
@@ -468,40 +469,6 @@ def enhance_chunks_with_links(chunks):
     
     return enhanced_chunks
 
-def enhance_documents_before_chunking(documents):
-    """Add source URL and document links to each document before chunking"""
-    enhanced_documents = []
-    
-    for doc in documents:
-        source_url = doc.metadata.get('source', 'Unknown')
-        document_links = doc.metadata.get('document_links', [])
-        
-        # Create source line
-        source_line = f"Source URL: {source_url}"
-        
-        # Add document links if available
-        if document_links:
-            links_text = " | Document Links: "
-            link_titles = []
-            for link in document_links[:5]:  # Include more links since we have space
-                link_titles.append(f"{link['title']} ({link['link']})")
-            links_text += "; ".join(link_titles)
-            if len(document_links) > 5:
-                links_text += f" and {len(document_links) - 5} more..."
-            source_line += links_text
-        
-        # Add source line to the beginning of document content
-        enhanced_content = source_line + "\n\n" + doc.page_content
-        
-        # Create new document with enhanced content
-        enhanced_doc = Document(
-            page_content=enhanced_content,
-            metadata=doc.metadata
-        )
-        enhanced_documents.append(enhanced_doc)
-    
-    return enhanced_documents
-
 def re_rank_documents(query, documents, embeddings):
     if not documents:
         return []
@@ -553,7 +520,9 @@ def re_rank_documents(query, documents, embeddings):
             )
             final_ranked_docs.extend([doc for doc, score in sorted_docs])
         
-        return final_ranked_docs
+        # Enhance chunks with source URL and document links
+        enhanced_docs = enhance_chunks_with_links(final_ranked_docs)
+        return enhanced_docs
         
     except Exception as e:
         st.error(f"Error in re-ranking documents: {e}")
@@ -662,14 +631,13 @@ Answer:"""
                        
                         )
                         
-                        enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
-                        document_chunks = text_splitter.split_documents(enhanced_docs)
+                        document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
                         st.write(f"Number of chunks created: {len(document_chunks)}")
                         
                         # Count chunks with embedded links
                         chunks_with_links = sum(1 for chunk in document_chunks 
-                                              if "Source URL:" in chunk.page_content)
-                        st.info(f"{chunks_with_links} chunks contain source URLs and document links")
+                                              if "=== RELEVANT DOCUMENT LINKS ===" in chunk.page_content)
+                        st.info(f"{chunks_with_links} chunks contain embedded document links")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
@@ -716,13 +684,13 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         
                         links_used = 0
                         for doc in retrieved_docs:
-                            if "Source URL:" in doc.page_content:
+                            if "=== RELEVANT DOCUMENT LINKS ===" in doc.page_content:
                                 links_used += 1
                         
                         if links_used > 0:
-                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links that were sent to the LLM")
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
                         else:
-                            st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
+                            st.info("ℹ️ No chunks with embedded document links were retrieved for this query")
                     else:
                         st.info("No chunks were retrieved for this query.")
                 
