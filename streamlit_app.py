@@ -62,7 +62,7 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-RELEVANCE_SCORE_THRESHOLD = 0.1
+RELEVANCE_SCORE_THRESHOLD = 0.5
 
 def relevance_score(query, document, embeddings):
     try:
@@ -654,13 +654,11 @@ Answer:"""
                             st.session_state['prompt'] = prompt
                             st.warning("Using fallback prompt template")
                         
-                        text_splitter = SemanticChunker(
-                       embeddings=HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5"),
-                       breakpoint_threshold_type="percentile",
-                      breakpoint_threshold_amount=70,
-                      min_chunk_size=200
-                       
-                        )
+                        text_splitter = RecursiveCharacterTextSplitter(
+                                        chunk_size=1000,
+                                        chunk_overlap=200,
+                                        length_function=len
+                                        )
                         
                         enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
                         document_chunks = text_splitter.split_documents(enhanced_docs)
