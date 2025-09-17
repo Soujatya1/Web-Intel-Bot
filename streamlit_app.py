@@ -15,8 +15,6 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain.schema import BaseRetriever
-from typing import List
 
 HARDCODED_WEBSITES = [
     "https://irdai.gov.in/acts",
@@ -64,7 +62,7 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-RELEVANCE_SCORE_THRESHOLD = 0.3
+RELEVANCE_SCORE_THRESHOLD = 0.1
 
 def relevance_score(query, document, embeddings):
     try:
@@ -82,122 +80,63 @@ def relevance_score(query, document, embeddings):
         keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
         return keyword_matches * 0.2
 
-class CustomRerankingRetriever(BaseRetriever):
-    def __init__(self, vector_store, embeddings, k=6):
-        super().__init__()
-        self.vector_store = vector_store
-        self.embeddings = embeddings
-        self.k = k
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
     
-    def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Get initial documents from FAISS
-        initial_docs = self.vector_store.similarity_search(query, k=self.k * 2)  # Get more initially
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
         
-        # Apply your custom re-ranking
-        ranked_docs = self.re_rank_documents(query, initial_docs, self.embeddings)
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
         
-        # Return top k documents
-        return ranked_docs[:self.k]
-    
-    def re_rank_documents(self, query, documents, embeddings):
-        if not documents:
-            return []
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
         
-        if embeddings is None:
-            return documents
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
         
-        try:
-            # Calculate relevance scores
-            scored_docs = []
-            for doc in documents:
-                score = self.relevance_score(query, doc, embeddings)
-                scored_docs.append((doc, score))
-            
-            # Filter by threshold
-            scored_docs = [(doc, score) for doc, score in scored_docs 
-                          if score >= RELEVANCE_SCORE_THRESHOLD]
-            
-            if not scored_docs:
-                return documents[:self.k]
-            
-            # Sort by score (highest first)
-            scored_docs.sort(key=lambda x: x[1], reverse=True)
-            
-            # Extract documents and enhance with source information
-            ranked_docs = [doc for doc, score in scored_docs]
-            enhanced_docs = self.enhance_chunks_with_links(ranked_docs)
-            
-            return enhanced_docs
-            
-        except Exception as e:
-            print(f"Error in re-ranking: {e}")
-            return documents
-    
-    def relevance_score(self, query, document, embeddings):
-        try:
-            query_embedding = embeddings.embed_query(query)
-            document_embedding = embeddings.embed_documents([document.page_content])[0]
-            similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
-            
-            # Improved keyword matching
-            query_words = query.lower().split()
-            doc_content = document.page_content.lower()
-            
-            # Count exact word matches
-            exact_matches = sum(1 for word in query_words if word in doc_content)
-            
-            # Count phrase matches (2-word combinations)
-            phrase_matches = 0
-            for i in range(len(query_words) - 1):
-                phrase = " ".join(query_words[i:i+2])
-                if phrase in doc_content:
-                    phrase_matches += 1
-            
-            # Weight the bonuses more significantly
-            keyword_bonus = exact_matches * 0.2 + phrase_matches * 0.3
-            
-            return similarity + keyword_bonus
-            
-        except Exception as e:
-            # Fallback to keyword matching only
-            query_words = query.lower().split()
-            doc_content = document.page_content.lower()
-            keyword_matches = sum(1 for word in query_words if word in doc_content)
-            return keyword_matches * 0.3
-    
-    def enhance_chunks_with_links(self, chunks):
-        """Add source URL and document links to the first line of each chunk"""
-        enhanced_chunks = []
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
         
-        for chunk in chunks:
-            source_url = chunk.metadata.get('source', 'Unknown')
-            document_links = chunk.metadata.get('document_links', [])
-            
-            # Create source line
-            source_line = f"Source URL: {source_url}"
-            
-            # Add document links if available
-            if document_links:
-                links_text = " | Document Links: "
-                link_titles = []
-                for link in document_links[:3]:
-                    link_titles.append(f"{link['title']} ({link['link']})")
-                links_text += "; ".join(link_titles)
-                if len(document_links) > 3:
-                    links_text += f" and {len(document_links) - 3} more..."
-                source_line += links_text
-            
-            # Add source line to the beginning of chunk content
-            enhanced_content = source_line + "\n\n" + chunk.page_content
-            
-            # Create new chunk with enhanced content
-            enhanced_chunk = Document(
-                page_content=enhanced_content,
-                metadata=chunk.metadata
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
             )
-            enhanced_chunks.append(enhanced_chunk)
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
         
-        return enhanced_chunks
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
 
 def enhanced_web_scrape(url):
     try:
@@ -242,8 +181,7 @@ def extract_document_links(html_content, url):
             href = urljoin(url, href)
         
         document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                           'amendment', 'notification', 'order', 'policy', 'master', 'framework', 'directive',
-                           'insurance', 'aadhaar', 'compliance', 'licensing']
+                           'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
         
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
@@ -344,13 +282,13 @@ def format_document_links_for_embedding(document_links):
     
     if content_docs:
         formatted_links += "\n[CONTENT PAGES]\n"
-        for i, link_info in enumerate(content_docs, 1):
-            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(content_docs[:10]):
+            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
     
     if ref_docs:
         formatted_links += "\n[REFERENCE DOCUMENTS]\n"
-        for i, link_info in enumerate(ref_docs, 1):
-            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(ref_docs[:10]):
+            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
     
     formatted_links += "=== END DOCUMENT LINKS ===\n\n"
     
@@ -530,6 +468,98 @@ def enhance_chunks_with_links(chunks):
     
     return enhanced_chunks
 
+def enhance_documents_before_chunking(documents):
+    """Add source URL and document links to each document before chunking"""
+    enhanced_documents = []
+    
+    for doc in documents:
+        source_url = doc.metadata.get('source', 'Unknown')
+        document_links = doc.metadata.get('document_links', [])
+        
+        # Create source line
+        source_line = f"Source URL: {source_url}"
+        
+        # Add document links if available
+        if document_links:
+            links_text = " | Document Links: "
+            link_titles = []
+            for link in document_links[:5]:  # Include more links since we have space
+                link_titles.append(f"{link['title']} ({link['link']})")
+            links_text += "; ".join(link_titles)
+            if len(document_links) > 5:
+                links_text += f" and {len(document_links) - 5} more..."
+            source_line += links_text
+        
+        # Add source line to the beginning of document content
+        enhanced_content = source_line + "\n\n" + doc.page_content
+        
+        # Create new document with enhanced content
+        enhanced_doc = Document(
+            page_content=enhanced_content,
+            metadata=doc.metadata
+        )
+        enhanced_documents.append(enhanced_doc)
+    
+    return enhanced_documents
+
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -605,7 +635,7 @@ if not st.session_state['docs_loaded']:
                         )
                         st.session_state['llm'] = llm
                         
-                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-miniLM-L6-v2")
+                        hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                         st.session_state['hf_embedding'] = hf_embedding
                         
                         try:
@@ -625,30 +655,27 @@ Answer:"""
                             st.warning("Using fallback prompt template")
                         
                         text_splitter = SemanticChunker(
-                       embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
+                       embeddings=HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5"),
                        breakpoint_threshold_type="percentile",
-                      breakpoint_threshold_amount=95,
-                      min_chunk_size=400
+                      breakpoint_threshold_amount=70,
+                      min_chunk_size=200
                        
                         )
                         
-                        document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
+                        enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
+                        document_chunks = text_splitter.split_documents(enhanced_docs)
                         st.write(f"Number of chunks created: {len(document_chunks)}")
                         
                         # Count chunks with embedded links
                         chunks_with_links = sum(1 for chunk in document_chunks 
-                                              if "=== RELEVANT DOCUMENT LINKS ===" in chunk.page_content)
-                        st.info(f"{chunks_with_links} chunks contain embedded document links")
+                                              if "Source URL:" in chunk.page_content)
+                        st.info(f"{chunks_with_links} chunks contain source URLs and document links")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
-                        custom_retriever = CustomRerankingRetriever(
-                                        vector_store=st.session_state['vector_db'],
-                                        embeddings=st.session_state['hf_embedding'],
-                                        k=6
-                            )
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(custom_retriever, document_chain)
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
+                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
@@ -689,13 +716,13 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                         
                         links_used = 0
                         for doc in retrieved_docs:
-                            if "=== RELEVANT DOCUMENT LINKS ===" in doc.page_content:
+                            if "Source URL:" in doc.page_content:
                                 links_used += 1
                         
                         if links_used > 0:
-                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links that were sent to the LLM")
                         else:
-                            st.info("ℹ️ No chunks with embedded document links were retrieved for this query")
+                            st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
                     else:
                         st.info("No chunks were retrieved for this query.")
                 
