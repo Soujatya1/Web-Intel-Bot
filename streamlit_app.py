@@ -527,9 +527,9 @@ Answer:"""
                         
                         text_splitter = SemanticChunker(
                        embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
-                       breakpoint_threshold_type="percentile",  # can be "percentile" or "standard_deviation"
-                      breakpoint_threshold_amount=95,            # higher → fewer, larger chunks; tune 90–98
-                      min_chunk_size=400                      # prevent overly small chunks
+                       breakpoint_threshold_type="percentile",
+                      breakpoint_threshold_amount=95,
+                      min_chunk_size=400
                        
                         )
                         
