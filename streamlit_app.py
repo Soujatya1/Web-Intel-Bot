@@ -15,6 +15,8 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
+from langchain.schema import BaseRetriever
+from typing import List
 
 HARDCODED_WEBSITES = [
     "https://irdai.gov.in/acts",
