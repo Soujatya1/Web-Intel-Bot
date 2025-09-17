@@ -84,6 +84,7 @@ def relevance_score(query, document, embeddings):
 
 class CustomRerankingRetriever(BaseRetriever):
     def __init__(self, vector_store, embeddings, k=6):
+        super().__init__()
         self.vector_store = vector_store
         self.embeddings = embeddings
         self.k = k
