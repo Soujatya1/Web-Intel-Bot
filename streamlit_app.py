@@ -244,7 +244,6 @@ def extract_structured_content(html_content, url):
     
     content_sections = {}
     
-    # Extract news sections
     news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
         keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
     ))
@@ -377,31 +376,26 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
                 st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
 
 def enhance_chunks_with_links(chunks):
-    """Add source URL and document links to the first line of each chunk"""
     enhanced_chunks = []
     
     for chunk in chunks:
         source_url = chunk.metadata.get('source', 'Unknown')
         document_links = chunk.metadata.get('document_links', [])
         
-        # Create source line
         source_line = f"Source URL: {source_url}"
         
-        # Add document links if available
         if document_links:
             links_text = " | Document Links: "
             link_titles = []
-            for link in document_links[:3]:  # Limit to first 3 links to avoid too long first line
+            for link in document_links[:3]:
                 link_titles.append(f"{link['title']} ({link['link']})")
             links_text += "; ".join(link_titles)
             if len(document_links) > 3:
                 links_text += f" and {len(document_links) - 3} more..."
             source_line += links_text
         
-        # Add source line to the beginning of chunk content
         enhanced_content = source_line + "\n\n" + chunk.page_content
         
-        # Create new chunk with enhanced content
         enhanced_chunk = Document(
             page_content=enhanced_content,
             metadata=chunk.metadata
@@ -411,31 +405,26 @@ def enhance_chunks_with_links(chunks):
     return enhanced_chunks
 
 def enhance_documents_before_chunking(documents):
-    """Add source URL and document links to each document before chunking"""
     enhanced_documents = []
     
     for doc in documents:
         source_url = doc.metadata.get('source', 'Unknown')
         document_links = doc.metadata.get('document_links', [])
         
-        # Create source line
         source_line = f"Source URL: {source_url}"
         
-        # Add document links if available
         if document_links:
             links_text = " | Document Links: "
             link_titles = []
-            for link in document_links[:5]:  # Include more links since we have space
+            for link in document_links[:5]:
                 link_titles.append(f"{link['title']} ({link['link']})")
             links_text += "; ".join(link_titles)
             if len(document_links) > 5:
                 links_text += f" and {len(document_links) - 5} more..."
             source_line += links_text
         
-        # Add source line to the beginning of document content
         enhanced_content = source_line + "\n\n" + doc.page_content
         
-        # Create new document with enhanced content
         enhanced_doc = Document(
             page_content=enhanced_content,
             metadata=doc.metadata
@@ -606,16 +595,27 @@ Answer:"""
                         document_chunks = text_splitter.split_documents(enhanced_docs)
                         st.write(f"Number of chunks created: {len(document_chunks)}")
                         
-                        # Count chunks with embedded links
                         chunks_with_links = sum(1 for chunk in document_chunks 
                                               if "Source URL:" in chunk.page_content)
                         st.info(f"{chunks_with_links} chunks contain source URLs and document links")
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 10})
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+                        def custom_retrieval_with_reranking(query_dict):
+                            query = query_dict["input"]
+    
+                            raw_retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
+                            raw_docs = raw_retriever.get_relevant_documents(query)
+    
+                            reranked_docs = re_rank_documents(query, raw_docs, st.session_state['hf_embedding'])
+                            final_docs = reranked_docs[:6]
+    
+                            document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
+                            result = document_chain.invoke({"input": query, "context": final_docs})
+    
+                            return {"answer": result, "context": final_docs}
+
+                        st.session_state['retrieval_chain'] = custom_retrieval_with_reranking
                         
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
@@ -644,7 +644,7 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                     st.session_state['prompt'] = prompt
                 
-                response = st.session_state['retrieval_chain'].invoke({"input": query})
+                response = st.session_state['retrieval_chain']({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
