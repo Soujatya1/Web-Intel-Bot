@@ -11,6 +11,8 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import re
+from datetime import datetime
+
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
@@ -19,11 +21,10 @@ from langchain_experimental.text_splitter import SemanticChunker
 HARDCODED_WEBSITES = [
                       "https://irdai.gov.in/acts",
                       "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/notices1",
                       "https://irdai.gov.in/consolidated-gazette-notified-regulations",
                       "https://irdai.gov.in/notifications",
-                      "https://irdai.gov.in/rules",
                       "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-                      "https://irdai.gov.in/notifications",
                       "https://irdai.gov.in/circulars",
                       "https://irdai.gov.in/orders1",
                       "https://irdai.gov.in/exposure-drafts",
@@ -63,7 +64,7 @@ IMPORTANT INSTRUCTIONS:
 - Always reference the source URL provided at the beginning of each chunk in your answers
 - Answer questions using the provided context from the websites
 - Pay special attention to dates, recent updates, and chronological information
-- Always Give response in chronological order according to date.
+- Always Give response in chronological order according to date.if from multiple different sources links then try to use latest  documents linksfrom different source link.
 - When asked about "what's new" or recent developments, focus on the most recent information available
 - Look for press releases, circulars, guidelines, and policy updates
 - Provide specific details about new regulations, policy changes, or announcements
@@ -73,7 +74,8 @@ IMPORTANT INSTRUCTIONS:
 - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
 - Use the document links provided in the context to give more comprehensive answers with proper references
 - Always include the source URL in your answer for credibility and reference.
-
+- If any general question is asked like latest updates on legal notices ,then instead of only giving source link also latest document links chronlogically from legals.The document links can be of any category like acts , notices,circulars many more.
+-**CRITICAL**: Never miss to give Document link and source link in your answer.
 FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
 "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
 
@@ -159,12 +161,15 @@ def filter_urls_by_query(query, urls):
     "enforcement_bsa": [
         "enforcementdirectorate.gov.in/bsa"
     ],
+    "gazettes": [
+        "https://egazette.gov.in/(S(ylhvpcedcc5ooe3drkj1way2))/default.aspx"
+    ],
     "irdai": ["irdai.gov.in"],
     "uidai": ["uidai.gov.in"],
     "aadhaar": ["uidai.gov.in"],
-    "enforcement": ["enforcementdirectorate.gov.in"]
+    "enforcement": ["enforcementdirectorate.gov.in"],
+    "legal":["irdai.gov.in/acts","uidai.gov.in/en/about-uidai/legal-framework","https://irdai.gov.in/notices1","https://irdai.gov.in/consolidated-gazette-notified-regulations","https://irdai.gov.in/notifications","https://irdai.gov.in/circulars","https://irdai.gov.in/orders1","https://irdai.gov.in/exposure-drafts","https://irdai.gov.in/programmes-to-advance-understanding-of-rti","https://irdai.gov.in/antimoney-laundering","https://irdai.gov.in/other-communication",'irdai.gov.in/guidelines']
     }
-    
     relevant_urls = []
     
     # Find matching patterns with priority for exact matches
@@ -251,16 +256,16 @@ def enhanced_relevance_score(query, document, embeddings):
             if any(term in query.lower() for term in ['fema', 'pmla', 'money laundering', 'enforcement']):
                 domain_bonus += 0.15
         
-        # Source credibility bonus (acts > circulars > guidelines > others)
-        if '/acts' in source_url:
-            domain_bonus += 0.1
-        elif '/circulars' in source_url:
-            domain_bonus += 0.08
-        elif '/guidelines' in source_url:
-            domain_bonus += 0.06
+        # # Source credibility bonus (acts > circulars > guidelines > others)
+        # if '/acts' in source_url:
+        #     domain_bonus += 0.1
+        # elif '/circulars' in source_url:
+        #     domain_bonus += 0.08
+        # elif '/guidelines' in source_url:
+        #     domain_bonus += 0.06
         
         # Recency bonus for recent years (if mentioned in content)
-        current_year = 2024
+        current_year = datetime.now().year
         for year in range(current_year-2, current_year+1):
             if str(year) in content_lower:
                 domain_bonus += 0.05
