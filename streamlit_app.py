@@ -97,10 +97,10 @@ def filter_urls_by_query(query, urls):
     url_keywords = {
        "acts": [
         "irdai.gov.in/acts",
-        "uidai.gov.in/en/about-uidai/legal-framework"
     ],
     "rules": [
         "https://irdai.gov.in/rules",
+		"https://uidai.gov.in/en/about-uidai/legal-framework/rules.html"
        
     ],
     "regulations": [
