@@ -63,7 +63,7 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-RELEVANCE_SCORE_THRESHOLD = 0.1
+RELEVANCE_SCORE_THRESHOLD = 0.5
 
 def relevance_score(query, document, embeddings):
     try:
