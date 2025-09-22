@@ -653,7 +653,7 @@ Answer:"""
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         def custom_retrieval_with_reranking(query_dict):
-						    query = query_dict["input"]
+							query = query_dict["input"]
 						    
 						    raw_retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
 						    raw_docs = raw_retriever.get_relevant_documents(query)
