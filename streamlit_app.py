@@ -14,9 +14,8 @@ import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
-import json
+from langchain_experimental.text_splitter import SemanticChunker
 
-# Configuration
 HARDCODED_WEBSITES = [
     "https://irdai.gov.in/acts",
     "https://irdai.gov.in/home",
@@ -32,39 +31,114 @@ HARDCODED_WEBSITES = [
     "https://enforcementdirectorate.gov.in/fema?page=2"
 ]
 
-# Enhanced System Prompt with Explicit Citation Requirements
 SYSTEM_PROMPT_TEMPLATE = """
-You are a specialized assistant for IRDAI, UIDAI, PMLA and egazette websites.
+You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
 
-**CRITICAL CITATION REQUIREMENTS:**
-1. ALWAYS extract and include the "Source URL:" from each context chunk
-2. ALWAYS include document links when they appear in the context
-3. Format sources as: "**Source:** [URL]"
-4. Format document links as: "[Link Title](URL)"
-5. End your response with a "**Sources Used:**" section listing all source URLs
+Answer the question based ONLY on the provided context information.
 
-**RESPONSE STRUCTURE:**
-- Answer the question using the provided context
-- Include inline citations with source URLs
-- When mentioning acts, regulations, or documents, include the relevant links
-- Focus on recent information when asked about "latest" or "new" developments
-- Always end with "**Sources Used:**" section
+IMPORTANT INSTRUCTIONS:
+- Each chunk in the context starts with "Source URL:" followed by the source website and relevant document links
+- Always reference the source URL provided at the beginning of each chunk in your answers
+- Answer questions using the provided context from the websites
+- Pay special attention to dates, recent updates, and chronological information
+- Always Give response in chronological order according to date.
+- When asked about "what's new" or recent developments, focus on the most recent information available
+- Look for press releases, circulars, guidelines, and policy updates
+- Provide specific details about new regulations, policy changes, or announcements
+- If you find dated information, mention the specific dates
+- When a question like, "Latest guidelines under IRDAI" is asked, follow the 'Last Updated' date and as per the same, respond to the query
+- When mentioning any acts, circulars, or regulations, try to reference the available document links that are provided in the context
+- If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
+- Use the document links provided in the context to give more comprehensive answers with proper references
+- Always include the source URL in your answer for credibility and reference
 
-**IMPORTANT:**
-- If PII data detected, respond: "This query contains PII data which is outside my scope."
-- Each context chunk starts with "Source URL:" - YOU MUST use this information
+FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
+"Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
 
-**Context:** {context}
-**Question:** {input}
+Context: {context}
 
-**Your Response Must Include Sources and Links:**
+Question: {input}
+
+Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-RELEVANCE_SCORE_THRESHOLD = 0.1
+RELEVANCE_SCORE_THRESHOLD = 0.3
 
-# Utility Functions
+def relevance_score(query, document, embeddings):
+    try:
+        query_embedding = embeddings.embed_query(query)
+        document_embedding = embeddings.embed_documents([document.page_content])[0]
+        similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+        
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+        keyword_bonus = keyword_matches * 0.1
+        
+        return similarity + keyword_bonus
+    except Exception as e:
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+        return keyword_matches * 0.2
+
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
+
 def enhanced_web_scrape(url):
-    """Enhanced web scraping with proper headers"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -76,28 +150,23 @@ def enhanced_web_scrape(url):
         
         session = requests.Session()
         session.headers.update(headers)
+        
         response = session.get(url, timeout=15)
         response.raise_for_status()
         return response.text
         
     except Exception as e:
-        st.error(f"Scraping failed for {url}: {e}")
+        st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
 def extract_document_links(html_content, url):
-    """Extract document links with improved filtering"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Remove scripts and styles
     for script in soup(["script", "style"]):
         script.decompose()
     
     document_links = []
-    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                        'amendment', 'notification', 'insurance', 'policy', 'aadhaar',
-                        'master direction', 'gazette', 'pmla', 'fema']
     
-    # Extract all links
     all_links = soup.find_all('a', href=True)
     for link in all_links:
         href = link.get('href')
@@ -106,469 +175,577 @@ def extract_document_links(html_content, url):
         if not href or len(link_text) < 3:
             continue
             
-        # Convert relative URLs to absolute
         if href.startswith('/'):
             href = urljoin(url, href)
         elif not href.startswith(('http://', 'https://')):
             href = urljoin(url, href)
         
-        # Check if link is relevant
+        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                           'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
+        
         has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
         
-        if has_doc_keywords and 5 < len(link_text) < 200:
+        if has_doc_keywords and len(link_text) > 5:
             document_links.append({
-                'title': link_text.strip(),
+                'title': link_text,
                 'link': href,
-                'type': 'document'
+                'type': 'content'
             })
     
-    # Extract from tables (common in government sites)
     tables = soup.find_all('table')
     for table in tables:
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            for cell in cells:
-                links_in_cell = cell.find_all('a', href=True)
-                for link in links_in_cell:
-                    href = link.get('href')
-                    link_text = link.get_text(strip=True)
-                    
-                    if not href or len(link_text) < 5:
-                        continue
+            if len(cells) >= 2:
+                for cell in cells:
+                    links_in_cell = cell.find_all('a', href=True)
+                    for link in links_in_cell:
+                        href = link.get('href')
+                        link_text = link.get_text(strip=True)
                         
-                    if href.startswith('/'):
-                        href = urljoin(url, href)
-                    elif not href.startswith(('http://', 'https://')):
-                        href = urljoin(url, href)
-                    
-                    has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
-                    
-                    if has_doc_keywords and 5 < len(link_text) < 200:
+                        if not href or len(link_text) < 5:
+                            continue
+                            
+                        if href.startswith('/'):
+                            href = urljoin(url, href)
+                        elif not href.startswith(('http://', 'https://')):
+                            href = urljoin(url, href)
+                        
+                        document_patterns = [
+                            r'act.*\d{4}',
+                            r'circular.*\d+',
+                            r'amendment.*act',
+                            r'insurance.*act',
+                            r'guideline',
+                            r'master.*direction',
+                            r'regulation.*\d+',
+                            r'aadhaar.*act'
+                        ]
+                        
+                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
+                        
+                        if is_likely_document:
+                            document_links.append({
+                                'title': link_text,
+                                'link': href,
+                                'type': 'reference'
+                            })
+    
+    content_sections = soup.find_all(['div', 'section', 'article'])
+    for section in content_sections:
+        section_text = section.get_text().lower()
+        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
+            links_in_section = section.find_all('a', href=True)
+            for link in links_in_section:
+                href = link.get('href')
+                link_text = link.get_text(strip=True)
+                
+                if not href or len(link_text) < 5:
+                    continue
+                
+                if href.startswith('/'):
+                    href = urljoin(url, href)
+                elif not href.startswith(('http://', 'https://')):
+                    href = urljoin(url, href)
+                
+                if 10 < len(link_text) < 200:
+                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
+                                       'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
+                    if any(keyword in link_text.lower() for keyword in document_keywords):
                         document_links.append({
-                            'title': link_text.strip(),
+                            'title': link_text,
                             'link': href,
-                            'type': 'table_document'
+                            'type': 'reference'
                         })
     
-    # Remove duplicates
     seen_links = set()
     unique_document_links = []
     for link_info in document_links:
         link_key = (link_info['title'], link_info['link'])
-        if link_key not in seen_links and len(link_info['title']) > 5:
+        if link_key not in seen_links:
             seen_links.add(link_key)
             unique_document_links.append(link_info)
     
-    return unique_document_links[:15]  # Limit to prevent overwhelming
+    unique_document_links.sort(key=lambda x: (x['type'] != 'content', x['title']))
+    
+    return unique_document_links
 
-def create_enhanced_content(html_content, url):
-    """Create enhanced content with embedded links"""
+def format_document_links_for_embedding(document_links):
+    if not document_links:
+        return ""
+    
+    formatted_links = "\n\n=== RELEVANT DOCUMENT LINKS ===\n"
+    
+    content_docs = [link for link in document_links if link['type'] == 'content']
+    ref_docs = [link for link in document_links if link['type'] == 'reference']
+    
+    if content_docs:
+        formatted_links += "\n[CONTENT PAGES]\n"
+        for i, link_info in enumerate(content_docs[:10]):
+            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+    
+    if ref_docs:
+        formatted_links += "\n[REFERENCE DOCUMENTS]\n"
+        for i, link_info in enumerate(ref_docs[:10]):
+            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+    
+    formatted_links += "=== END DOCUMENT LINKS ===\n\n"
+    
+    return formatted_links
+
+def extract_structured_content(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Remove scripts and styles
     for script in soup(["script", "style"]):
         script.decompose()
     
-    # Extract document links
-    document_links = extract_document_links(html_content, url)
+    content_sections = {}
     
-    # Get main text content
+    # Extract news sections
+    news_sections = soup.find_all(['div', 'section'], class_=lambda x: x and any(
+        keyword in x.lower() for keyword in ['news', 'update', 'recent', 'latest', 'whats-new']
+    ))
+    
+    if news_sections:
+        content_sections['news'] = []
+        for section in news_sections:
+            text = section.get_text(strip=True)
+            if len(text) > 50:
+                content_sections['news'].append(text)
+    
+    content_sections['document_links'] = extract_document_links(html_content, url)
+    
     main_text = soup.get_text()
     lines = (line.strip() for line in main_text.splitlines())
     chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-    clean_text = '\n'.join(chunk for chunk in chunks if chunk and len(chunk) > 10)
+    clean_text = '\n'.join(chunk for chunk in chunks if chunk)
     
-    # Create source header with embedded links
-    source_header = f"Source URL: {url}"
+    formatted_links = format_document_links_for_embedding(content_sections['document_links'])
+    enhanced_text = clean_text + formatted_links
     
-    if document_links:
-        source_header += "\nDocument Links Available:\n"
-        for i, link in enumerate(document_links[:10], 1):  # Limit display
-            source_header += f"{i}. {link['title']} - {link['link']}\n"
-    
-    # Combine content
-    enhanced_content = f"{source_header}\n\n--- MAIN CONTENT ---\n{clean_text}"
-    
-    return enhanced_content, document_links
+    return enhanced_text, content_sections
 
-def load_websites():
-    """Load all hardcoded websites with enhanced content processing"""
+def load_hardcoded_websites():
     loaded_docs = []
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for i, url in enumerate(HARDCODED_WEBSITES):
+    for url in HARDCODED_WEBSITES:
         try:
-            status_text.text(f"Loading: {url}")
+            st.write(f"Loading URL: {url}")
             
             html_content = enhanced_web_scrape(url)
             if html_content:
-                enhanced_content, document_links = create_enhanced_content(html_content, url)
+                enhanced_text, sections = extract_structured_content(html_content, url)
                 
                 doc = Document(
-                    page_content=enhanced_content,
+                    page_content=enhanced_text,
                     metadata={
-                        "source": url,
-                        "document_links": document_links,
-                        "total_links": len(document_links),
-                        "has_source_url": True
+                        "source": url, 
+                        "sections": sections,
+                        "document_links": sections.get('document_links', []),
+                        "has_embedded_links": True
                     }
                 )
                 loaded_docs.append(doc)
                 
-                # Show progress
-                with st.expander(f"✅ Loaded: {url} ({len(document_links)} links found)"):
-                    if document_links:
-                        st.write("**Sample Document Links:**")
-                        for link in document_links[:5]:
-                            st.write(f"- [{link['title']}]({link['link']})")
-                    else:
-                        st.write("No document links found")
-            else:
-                st.error(f"Failed to load: {url}")
+                if sections.get('news'):
+                    with st.expander(f"News/Updates found from {url}"):
+                        for i, news_item in enumerate(sections['news'][:3]):
+                            st.write(f"**Item {i+1}:** {news_item[:200]}...")
                 
-            progress_bar.progress((i + 1) / len(HARDCODED_WEBSITES))
+                if sections.get('document_links'):
+                    with st.expander(f"Document Links found from {url}"):
+                        st.write(f"**Total document links found:** {len(sections['document_links'])}")
+                        
+                        content_docs = [link for link in sections['document_links'] if link['type'] == 'content']
+                        ref_docs = [link for link in sections['document_links'] if link['type'] == 'reference']
+                        
+                        if content_docs:
+                            st.write("**Content Pages:**")
+                            for i, link_info in enumerate(content_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        if ref_docs:
+                            st.write("**Reference Documents:**")
+                            for i, link_info in enumerate(ref_docs[:10]):
+                                st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
+                        
+                        st.success(f"✅ Document links have been embedded into the text content for better retrieval")
+                else:
+                    st.write(f"No relevant document links found from {url}")
+            
+            st.success(f"Successfully loaded content from {url}")
             
         except Exception as e:
             st.error(f"Error loading {url}: {e}")
     
-    status_text.text(f"✅ Loaded {len(loaded_docs)} documents successfully!")
     return loaded_docs
 
-def relevance_score(query, document, embeddings):
-    """Calculate relevance score for document ranking"""
-    try:
-        query_embedding = embeddings.embed_query(query)
-        document_embedding = embeddings.embed_documents([document.page_content])[0]
-        similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
-        
-        # Keyword matching bonus
-        keywords = query.lower().split()
-        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-        keyword_bonus = keyword_matches * 0.1
-        
-        return similarity + keyword_bonus
-    except Exception:
-        # Fallback to keyword matching
-        keywords = query.lower().split()
-        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-        return keyword_matches * 0.2
+def is_fallback_response(response_text):
+    fallback_phrases = [
+        "fall outside the scope of the data I've been trained on",
+        "details you've asked for fall outside the scope",
+        "outside the scope of the data",
+        "However, I've gathered information that closely aligns"
+    ]
+    
+    return any(phrase in response_text for phrase in fallback_phrases)
 
-def rerank_documents(query, documents, embeddings):
-    """Rerank documents based on relevance"""
+def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
+    st.subheader(title)
+    
+    for i, chunk in enumerate(chunks[:3], 1):
+        with st.expander(f"Chunk {i} - Source: {chunk.metadata.get('source', 'Unknown')}"):
+            st.markdown("**Content:**")
+            content = chunk.page_content.strip()
+            
+            has_embedded_links = "=== RELEVANT DOCUMENT LINKS ===" in content
+            
+            if has_embedded_links:
+                text_part, links_part = content.split("=== RELEVANT DOCUMENT LINKS ===", 1)
+                
+                st.markdown("**Main Content:**")
+                if len(text_part) > 1000:
+                    st.text_area(f"Chunk {i} Main Content", text_part[:1000] + "...", height=200, disabled=True)
+                    st.info(f"Content truncated for display. Full length: {len(text_part)} characters")
+                else:
+                    st.text_area(f"Chunk {i} Main Content", text_part, height=min(200, max(100, len(text_part)//5)), disabled=True)
+                
+                st.markdown("**Embedded Document Links:**")
+                links_clean = links_part.replace("=== END DOCUMENT LINKS ===", "").strip()
+                st.code(links_clean, language="text")
+                
+            else:
+                if len(content) > 1000:
+                    st.text_area(f"Chunk {i} Content", content[:1000] + "...", height=200, disabled=True)
+                    st.info(f"Content truncated for display. Full length: {len(content)} characters")
+                else:
+                    st.text_area(f"Chunk {i} Content", content, height=min(200, max(100, len(content)//5)), disabled=True)
+            
+            st.markdown("**Metadata:**")
+            metadata = chunk.metadata
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**Source:** {metadata.get('source', 'N/A')}")
+                st.write(f"**Has Embedded Links:** {metadata.get('has_embedded_links', False)}")
+            
+            with col2:
+                st.write(f"**Chunk Length:** {len(content)} characters")
+                st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
+
+def enhance_chunks_with_links(chunks):
+    """Add source URL and document links to the first line of each chunk"""
+    enhanced_chunks = []
+    
+    for chunk in chunks:
+        source_url = chunk.metadata.get('source', 'Unknown')
+        document_links = chunk.metadata.get('document_links', [])
+        
+        # Create source line
+        source_line = f"Source URL: {source_url}"
+        
+        # Add document links if available
+        if document_links:
+            links_text = " | Document Links: "
+            link_titles = []
+            for link in document_links[:3]:  # Limit to first 3 links to avoid too long first line
+                link_titles.append(f"{link['title']} ({link['link']})")
+            links_text += "; ".join(link_titles)
+            if len(document_links) > 3:
+                links_text += f" and {len(document_links) - 3} more..."
+            source_line += links_text
+        
+        # Add source line to the beginning of chunk content
+        enhanced_content = source_line + "\n\n" + chunk.page_content
+        
+        # Create new chunk with enhanced content
+        enhanced_chunk = Document(
+            page_content=enhanced_content,
+            metadata=chunk.metadata
+        )
+        enhanced_chunks.append(enhanced_chunk)
+    
+    return enhanced_chunks
+
+def enhance_documents_before_chunking(documents):
+    """Add source URL and document links to each document before chunking"""
+    enhanced_documents = []
+    
+    for doc in documents:
+        source_url = doc.metadata.get('source', 'Unknown')
+        document_links = doc.metadata.get('document_links', [])
+        
+        # Create source line
+        source_line = f"Source URL: {source_url}"
+        
+        # Add document links if available
+        if document_links:
+            links_text = " | Document Links: "
+            link_titles = []
+            for link in document_links[:5]:  # Include more links since we have space
+                link_titles.append(f"{link['title']} ({link['link']})")
+            links_text += "; ".join(link_titles)
+            if len(document_links) > 5:
+                links_text += f" and {len(document_links) - 5} more..."
+            source_line += links_text
+        
+        # Add source line to the beginning of document content
+        enhanced_content = source_line + "\n\n" + doc.page_content
+        
+        # Create new document with enhanced content
+        enhanced_doc = Document(
+            page_content=enhanced_content,
+            metadata=doc.metadata
+        )
+        enhanced_documents.append(enhanced_doc)
+    
+    return enhanced_documents
+
+def re_rank_documents(query, documents, embeddings):
     if not documents:
         return []
     
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
     try:
         scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
         scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
         
         if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
             return documents[:6]
         
         scored_docs.sort(key=lambda x: x[1], reverse=True)
-        return [doc for doc, score in scored_docs[:6]]
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
         
     except Exception as e:
-        st.warning(f"Reranking failed: {e}. Using original order.")
-        return documents[:6]
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
 
-def custom_retrieval_with_enhanced_context(query_dict):
-    """Custom retrieval function that ensures source URLs and links are preserved"""
-    query = query_dict["input"]
-    
-    # Get initial documents
-    raw_retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
-    raw_docs = raw_retriever.get_relevant_documents(query)
-    
-    # Rerank documents
-    reranked_docs = rerank_documents(query, raw_docs, st.session_state.get('hf_embedding'))
-    
-    # Ensure all documents have proper source formatting
-    enhanced_docs = []
-    for doc in reranked_docs:
-        if not doc.page_content.startswith("Source URL:"):
-            # Add source URL if missing
-            source_url = doc.metadata.get('source', 'Unknown Source')
-            enhanced_content = f"Source URL: {source_url}\n\n{doc.page_content}"
-            doc.page_content = enhanced_content
-        
-        enhanced_docs.append(doc)
-    
-    # Create document chain and generate response
-    document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-    result = document_chain.invoke({"input": query, "context": enhanced_docs})
-    
-    return {"answer": result, "context": enhanced_docs}
+if 'loaded_docs' not in st.session_state:
+    st.session_state['loaded_docs'] = []
+if 'vector_db' not in st.session_state:
+    st.session_state['vector_db'] = None
+if 'retrieval_chain' not in st.session_state:
+    st.session_state['retrieval_chain'] = None
+if 'llm' not in st.session_state:
+    st.session_state['llm'] = None
+if 'docs_loaded' not in st.session_state:
+    st.session_state['docs_loaded'] = False
+if 'hf_embedding' not in st.session_state:
+    st.session_state['hf_embedding'] = None
+if 'prompt' not in st.session_state:
+    st.session_state['prompt'] = None
 
-def extract_sources_and_links(response_text, context_docs):
-    """Extract and display sources and links from response and context"""
-    sources = set()
-    document_links = []
-    
-    # Extract from context documents
-    for doc in context_docs:
-        content = doc.page_content
-        
-        # Extract source URL
-        if "Source URL:" in content:
-            lines = content.split('\n')
-            for line in lines:
-                if line.startswith("Source URL:"):
-                    source_url = line.replace("Source URL:", "").strip()
-                    sources.add(source_url)
-                    break
-        
-        # Extract document links
-        if "Document Links Available:" in content:
-            lines = content.split('\n')
-            in_links_section = False
-            for line in lines:
-                if "Document Links Available:" in line:
-                    in_links_section = True
-                    continue
-                if in_links_section and line.strip():
-                    if line.startswith("--- MAIN CONTENT ---"):
-                        break
-                    # Parse link format: "1. Title - URL"
-                    match = re.search(r'\d+\.\s*(.+?)\s*-\s*(https?://[^\s]+)', line)
-                    if match:
-                        title, url = match.groups()
-                        document_links.append({"title": title.strip(), "url": url.strip()})
-        
-        # Also check metadata
-        meta_source = doc.metadata.get('source')
-        if meta_source:
-            sources.add(meta_source)
-        
-        meta_links = doc.metadata.get('document_links', [])
-        for link in meta_links:
-            document_links.append({"title": link.get('title', ''), "url": link.get('link', '')})
-    
-    return list(sources), document_links
+st.title("Web GEN-ie")
 
-def display_enhanced_response(response, show_debug=False):
-    """Display response with proper source citations and links"""
-    response_text = response['answer']
-    context_docs = response.get('context', [])
-    
-    st.subheader("📋 Response:")
-    st.write(response_text)
-    
-    # Extract sources and links
-    sources, doc_links = extract_sources_and_links(response_text, context_docs)
-    
-    # Display sources
-    if sources:
-        st.write("\n**📍 Information Sources:**")
-        for i, source in enumerate(sorted(sources), 1):
-            st.markdown(f"{i}. [{source}]({source})")
-    else:
-        st.warning("⚠️ No sources were found in the context")
-    
-    # Display document links
-    if doc_links:
-        st.write("\n**📄 Related Document Links:**")
-        unique_links = {}
-        for link in doc_links:
-            if link['url'] and link['title']:
-                unique_links[link['url']] = link['title']
-        
-        for i, (url, title) in enumerate(unique_links.items(), 1):
-            st.markdown(f"{i}. [{title}]({url})")
-    else:
-        st.info("ℹ️ No document links found in the context")
-    
-    # Debug information
-    if show_debug:
-        st.subheader("🔍 Debug Information")
-        st.write(f"**Context documents:** {len(context_docs)}")
-        docs_with_sources = sum(1 for doc in context_docs if "Source URL:" in doc.page_content)
-        docs_with_links = sum(1 for doc in context_docs if "Document Links Available:" in doc.page_content)
-        st.write(f"**Docs with source URLs:** {docs_with_sources}")
-        st.write(f"**Docs with document links:** {docs_with_links}")
-        
-        for i, doc in enumerate(context_docs):
-            with st.expander(f"Context Doc {i+1} Preview"):
-                preview = doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content
-                st.code(preview)
+st.subheader("Azure OpenAI Configuration")
 
-# Streamlit App
-def main():
-    # Initialize session state
-    if 'docs_loaded' not in st.session_state:
-        st.session_state['docs_loaded'] = False
-    if 'loaded_docs' not in st.session_state:
-        st.session_state['loaded_docs'] = []
-    if 'vector_db' not in st.session_state:
-        st.session_state['vector_db'] = None
-    if 'retrieval_chain' not in st.session_state:
-        st.session_state['retrieval_chain'] = None
-    if 'llm' not in st.session_state:
-        st.session_state['llm'] = None
-    if 'hf_embedding' not in st.session_state:
-        st.session_state['hf_embedding'] = None
-    if 'prompt' not in st.session_state:
-        st.session_state['prompt'] = None
+col1, col2 = st.columns(2)
 
-    st.title("🌐 Web GEN-ie")
-    st.markdown("*Enhanced RAG System for Government Websites with Source Citations*")
-
-    # Configuration Section
-    st.subheader("🔧 Azure OpenAI Configuration")
+with col1:
+    azure_endpoint = st.text_input(
+        "Azure OpenAI Endpoint:", 
+        placeholder="https://your-resource.openai.azure.com/",
+        help="Your Azure OpenAI resource endpoint URL"
+    )
     
-    col1, col2 = st.columns(2)
+    api_key = st.text_input(
+        "Azure OpenAI API Key:", 
+        type="password",
+        placeholder="Enter your Azure OpenAI API key here...",
+        help="Your Azure OpenAI API key"
+    )
+
+with col2:
+    deployment_name = st.text_input(
+        "Deployment Name:", 
+        placeholder="gpt-4o",
+        help="The name of your deployed model (e.g., gpt-35-turbo, gpt-4)"
+    )
     
-    with col1:
-        azure_endpoint = st.text_input(
-            "Azure OpenAI Endpoint:", 
-            placeholder="https://your-resource.openai.azure.com/",
-            help="Your Azure OpenAI resource endpoint URL"
-        )
-        
-        api_key = st.text_input(
-            "Azure OpenAI API Key:", 
-            type="password",
-            placeholder="Enter your Azure OpenAI API key here...",
-            help="Your Azure OpenAI API key"
-        )
+    api_version = st.selectbox(
+        "API Version:",
+        ["2025-01-01-preview"],
+        index=0,
+        help="Azure OpenAI API version"
+    )
 
-    with col2:
-        deployment_name = st.text_input(
-            "Deployment Name:", 
-            placeholder="gpt-4o",
-            help="The name of your deployed model"
-        )
-        
-        api_version = st.selectbox(
-            "API Version:",
-            ["2025-01-01-preview", "2024-10-21-preview", "2024-08-01-preview"],
-            index=0,
-            help="Azure OpenAI API version"
-        )
+config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
 
-    config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
+if not config_complete:
+    st.warning("Please fill in all Azure OpenAI configuration fields to proceed.")
 
-    if not config_complete:
-        st.warning("⚠️ Please fill in all Azure OpenAI configuration fields to proceed.")
-        return
-
-    # Document Loading Section
-    st.subheader("📚 Document Loading")
-    
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        if st.session_state['docs_loaded']:
-            st.success(f"✅ {len(st.session_state['loaded_docs'])} documents loaded and ready!")
+if not st.session_state['docs_loaded']:
+    if st.button("Load Websites", disabled=not config_complete):
+        if not config_complete:
+            st.error("Please complete the Azure OpenAI configuration first.")
         else:
-            st.info("Click 'Load Websites' to begin document processing")
-    
-    with col2:
-        load_button = st.button("🔄 Load Websites", disabled=st.session_state['docs_loaded'])
-    
-    with col3:
-        if st.session_state['docs_loaded']:
-            reset_button = st.button("🗑️ Reset")
-            if reset_button:
-                # Reset all session state
-                for key in ['docs_loaded', 'loaded_docs', 'vector_db', 'retrieval_chain', 'llm', 'hf_embedding', 'prompt']:
-                    st.session_state[key] = None if key != 'docs_loaded' else False
-                    if key == 'loaded_docs':
-                        st.session_state[key] = []
+            st.session_state['loaded_docs'] = load_hardcoded_websites()
+            st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
+            
+            if config_complete and st.session_state['loaded_docs']:
+                with st.spinner("Processing documents with embedded links..."):
+                    try:
+                        llm = AzureChatOpenAI(
+                            azure_endpoint=azure_endpoint,
+                            api_key=api_key,
+                            azure_deployment=deployment_name,
+                            api_version=api_version,
+                            temperature=0.0,
+                            top_p=0.1
+                        )
+                        st.session_state['llm'] = llm
+                        
+                        hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-miniLM-L6-v2")
+                        st.session_state['hf_embedding'] = hf_embedding
+                        
+                        try:
+                            prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                            st.session_state['prompt'] = prompt
+                            st.success("Prompt template created successfully")
+                        except Exception as prompt_error:
+                            st.error(f"Error creating prompt template: {prompt_error}")
+                            fallback_template = """Answer the question based on the provided context.
+                            
+Context: {context}
+Question: {input}
 
-    # Load websites if button clicked
-    if load_button and not st.session_state['docs_loaded']:
-        with st.spinner("🔍 Loading and processing websites..."):
+Answer:"""
+                            prompt = ChatPromptTemplate.from_template(fallback_template)
+                            st.session_state['prompt'] = prompt
+                            st.warning("Using fallback prompt template")
+                        
+                        text_splitter = SemanticChunker(
+                       embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
+                       breakpoint_threshold_type="percentile",
+                      breakpoint_threshold_amount=95,
+                      min_chunk_size=400
+                       
+                        )
+                        
+                        enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
+                        document_chunks = text_splitter.split_documents(enhanced_docs)
+                        st.write(f"Number of chunks created: {len(document_chunks)}")
+                        
+                        # Count chunks with embedded links
+                        chunks_with_links = sum(1 for chunk in document_chunks 
+                                              if "Source URL:" in chunk.page_content)
+                        st.info(f"{chunks_with_links} chunks contain source URLs and document links")
+                        
+                        st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
+                        
+                        document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
+                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+                        
+                        st.session_state['docs_loaded'] = True
+                        st.success("Documents processed with embedded links and ready for querying!")
+                    
+                    except Exception as e:
+                        st.error(f"Error initializing Azure OpenAI: {e}")
+                        st.error("Please check your Azure OpenAI configuration and try again.")
+
+st.subheader("Ask Questions")
+query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
+
+show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
+
+if st.button("Get Answer", disabled=not config_complete) and query:
+    if not config_complete:
+        st.error("Please complete the Azure OpenAI configuration first.")
+    elif st.session_state.get('vector_db') and st.session_state.get('llm'):
+        with st.spinner("Searching and generating answer..."):
             try:
-                # Load documents
-                st.session_state['loaded_docs'] = load_websites()
+                if st.session_state.get('hf_embedding') is None:
+                    st.info("Initializing embeddings...")
+                    st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
                 
-                if not st.session_state['loaded_docs']:
-                    st.error("❌ No documents were loaded successfully.")
-                    return
+                if st.session_state.get('prompt') is None:
+                    st.info("Creating prompt template...")
+                    prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                    st.session_state['prompt'] = prompt
                 
-                # Initialize components
-                st.subheader("🤖 Initializing AI Components")
+                response = st.session_state['retrieval_chain'].invoke({"input": query})
                 
-                # Initialize LLM
-                with st.spinner("Initializing Azure OpenAI..."):
-                    llm = AzureChatOpenAI(
-                        azure_endpoint=azure_endpoint,
-                        api_key=api_key,
-                        azure_deployment=deployment_name,
-                        api_version=api_version,
-                        temperature=0.0,
-                        top_p=0.1
-                    )
-                    st.session_state['llm'] = llm
-                    st.success("✅ Azure OpenAI initialized")
+                st.subheader("Response:")
+                st.write(response['answer'])
                 
-                # Initialize embeddings
-                with st.spinner("Loading embeddings model..."):
-                    hf_embedding = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
-                    st.session_state['hf_embedding'] = hf_embedding
-                    st.success("✅ Embeddings model loaded")
+                if show_chunks and 'context' in response:
+                    retrieved_docs = response['context']
+                    if retrieved_docs:
+                        display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
+                        
+                        links_used = 0
+                        for doc in retrieved_docs:
+                            if "Source URL:" in doc.page_content:
+                                links_used += 1
+                        
+                        if links_used > 0:
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links that were sent to the LLM")
+                        else:
+                            st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
+                    else:
+                        st.info("No chunks were retrieved for this query.")
                 
-                # Create prompt template
-                prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                st.session_state['prompt'] = prompt
-                
-                # Process documents
-                with st.spinner("Creating document chunks and vector database..."):
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=1200,
-                        chunk_overlap=200,
-                        length_function=len
-                    )
+                if not is_fallback_response(response['answer']):
+                    st.write("\n**📍 Information Sources:**")
+                    sources = set()
+                    retrieved_docs = response.get('context', [])
+                    for doc in retrieved_docs:
+                        source = doc.metadata.get('source', 'Unknown')
+                        sources.add(source)
                     
-                    document_chunks = text_splitter.split_documents(st.session_state['loaded_docs'])
-                    st.write(f"📄 Created {len(document_chunks)} document chunks")
-                    
-                    # Verify chunks have source URLs
-                    chunks_with_sources = sum(1 for chunk in document_chunks if "Source URL:" in chunk.page_content)
-                    st.success(f"✅ {chunks_with_sources}/{len(document_chunks)} chunks contain source URLs")
-                    
-                    # Create vector database
-                    st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
-                    st.success("✅ Vector database created")
-                
-                # Set up retrieval chain
-                st.session_state['retrieval_chain'] = custom_retrieval_with_enhanced_context
-                st.session_state['docs_loaded'] = True
-                
-                st.success("🎉 All components initialized successfully! Ready for queries.")
-                
+                    for i, source in enumerate(sources, 1):
+                        st.write(f"{i}. [{source}]({source})")
+                else:
+                    st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+            
             except Exception as e:
-                st.error(f"❌ Error during initialization: {e}")
-                st.error("Please check your configuration and try again.")
-                return
-
-    # Query Section
-    if st.session_state['docs_loaded']:
-        st.subheader("❓ Ask Questions")
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            query = st.text_input(
-                "Enter your question:",
-                value="What are the recent Insurance Acts and amendments?",
-                placeholder="Ask about regulations, acts, guidelines, or recent updates..."
-            )
-        
-        with col2:
-            show_debug = st.checkbox("🔍 Show Debug Info", value=False)
-        
-        if st.button("🔍 Get Answer") and query:
-            with st.spinner("🤖 Processing your question..."):
-                try:
-                    response = st.session_state['retrieval_chain']({"input": query})
-                    display_enhanced_response(response, show_debug=show_debug)
-                    
-                except Exception as e:
-                    st.error(f"❌ Error generating response: {e}")
-                    st.error("Please try rephrasing your question or check the configuration.")
-
-if __name__ == "__main__":
-    main()
+                st.error(f"Error generating response: {e}")
+                st.error("Please check your Azure OpenAI configuration and try again.")
+                st.error("Debug Info:")
+                st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
+                st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
+                st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
+                st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
+    else:
+        st.warning("Please load websites first by clicking the 'Load Websites' button.")
