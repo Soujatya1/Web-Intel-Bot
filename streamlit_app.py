@@ -477,7 +477,6 @@ def main():
                     st.session_state[key] = None if key != 'docs_loaded' else False
                     if key == 'loaded_docs':
                         st.session_state[key] = []
-                st.experimental_rerun()
 
     # Load websites if button clicked
     if load_button and not st.session_state['docs_loaded']:
