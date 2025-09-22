@@ -1,3 +1,4 @@
+
 import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import AzureChatOpenAI
@@ -14,7 +15,6 @@ import re
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
 from langchain_experimental.text_splitter import SemanticChunker
 
 HARDCODED_WEBSITES = [
@@ -63,340 +63,24 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-# Enhanced relevance scoring with multiple factors
-def enhanced_relevance_score(query, document, embeddings, query_embedding=None):
-    """
-    Enhanced relevance scoring that considers:
-    1. Semantic similarity using embeddings
-    2. Keyword matching with query terms
-    3. Source link relevance
-    4. Document type importance
-    5. Content quality indicators
-    """
+RELEVANCE_SCORE_THRESHOLD = 0.1
+
+def relevance_score(query, document, embeddings):
     try:
-        # Get embeddings
-        if query_embedding is None:
-            query_embedding = embeddings.embed_query(query)
+        query_embedding = embeddings.embed_query(query)
         document_embedding = embeddings.embed_documents([document.page_content])[0]
+        similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
         
-        # 1. Semantic similarity (base score)
-        semantic_similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
+        keyword_bonus = keyword_matches * 0.1
         
-        # 2. Enhanced keyword matching
-        query_terms = set(query.lower().split())
-        doc_content = document.page_content.lower()
-        
-        # Direct keyword matches
-        direct_matches = sum(1 for term in query_terms if term in doc_content)
-        keyword_score = (direct_matches / len(query_terms)) if query_terms else 0
-        
-        # 3. Source link relevance scoring
-        source_score = calculate_source_relevance(query, document)
-        
-        # 4. Document type importance
-        doc_type_score = calculate_document_type_score(document)
-        
-        # 5. Content quality indicators
-        content_quality_score = calculate_content_quality(document)
-        
-        # 6. Recency bonus (if date information is available)
-        recency_score = calculate_recency_bonus(document)
-        
-        # Combine all scores with weights
-        final_score = (
-            semantic_similarity * 0.4 +           # Semantic understanding
-            keyword_score * 0.2 +                 # Keyword relevance
-            source_score * 0.2 +                  # Source relevance
-            doc_type_score * 0.1 +                # Document type importance
-            content_quality_score * 0.05 +        # Content quality
-            recency_score * 0.05                  # Recency bonus
-        )
-        
-        return final_score
-        
+        return similarity + keyword_bonus
     except Exception as e:
-        st.warning(f"Error in enhanced relevance scoring, falling back to keyword matching: {e}")
-        # Fallback to keyword matching
-        query_terms = query.lower().split()
-        keyword_matches = sum(1 for term in query_terms if term in document.page_content.lower())
+        keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
         return keyword_matches * 0.2
 
-def calculate_source_relevance(query, document):
-    """Calculate relevance based on source URLs and document links"""
-    score = 0.0
-    
-    # Extract source URL from document
-    source_url = document.metadata.get('source', '')
-    doc_content = document.page_content
-    
-    # Query-specific source relevance
-    query_lower = query.lower()
-    
-    # High-value terms that should match with specific sources
-    source_mappings = {
-        'irdai': ['irdai.gov.in'],
-        'insurance': ['irdai.gov.in'],
-        'fema': ['enforcementdirectorate.gov.in'],
-        'enforcement': ['enforcementdirectorate.gov.in'],
-        'aadhaar': ['uidai.gov.in'],
-        'uidai': ['uidai.gov.in'],
-        'pmla': ['enforcementdirectorate.gov.in'],
-        'circular': ['irdai.gov.in', 'enforcementdirectorate.gov.in'],
-        'regulation': ['irdai.gov.in', 'enforcementdirectorate.gov.in'],
-        'guideline': ['irdai.gov.in', 'enforcementdirectorate.gov.in'],
-        'notification': ['irdai.gov.in', 'enforcementdirectorate.gov.in']
-    }
-    
-    # Check if query terms match expected sources
-    for term, expected_sources in source_mappings.items():
-        if term in query_lower:
-            for expected_source in expected_sources:
-                if expected_source in source_url:
-                    score += 0.3
-                    break
-    
-    # Bonus for documents with embedded links
-    if "=== RELEVANT DOCUMENT LINKS ===" in doc_content:
-        score += 0.2
-    
-    # Check document link relevance
-    doc_links = document.metadata.get('document_links', [])
-    if doc_links:
-        link_relevance = 0
-        for link in doc_links:
-            link_title = link.get('title', '').lower()
-            # Check if link title contains query terms
-            query_terms = query_lower.split()
-            for term in query_terms:
-                if term in link_title:
-                    link_relevance += 0.1
-        score += min(link_relevance, 0.5)  # Cap the link bonus
-    
-    return min(score, 1.0)  # Cap at 1.0
-
-def calculate_document_type_score(document):
-    """Score based on document type (acts, circulars, etc.)"""
-    doc_content = document.page_content.lower()
-    
-    # High-value document types
-    high_value_types = [
-        'act', 'amendment', 'regulation', 'circular', 'guideline', 
-        'notification', 'master direction', 'policy', 'rule'
-    ]
-    
-    score = 0.0
-    for doc_type in high_value_types:
-        if doc_type in doc_content:
-            score += 0.1
-    
-    # Bonus for official document patterns
-    official_patterns = [
-        r'act.*\d{4}',
-        r'circular.*no',
-        r'notification.*no',
-        r'regulation.*\d+',
-        r'guideline.*\d+'
-    ]
-    
-    for pattern in official_patterns:
-        if re.search(pattern, doc_content):
-            score += 0.2
-            break
-    
-    return min(score, 1.0)
-
-def calculate_content_quality(document):
-    """Score based on content quality indicators"""
-    doc_content = document.page_content
-    score = 0.0
-    
-    # Length bonus (longer documents often have more information)
-    if len(doc_content) > 500:
-        score += 0.2
-    elif len(doc_content) > 1000:
-        score += 0.4
-    elif len(doc_content) > 2000:
-        score += 0.6
-    
-    # Structure bonus (documents with clear structure)
-    if "Source URL:" in doc_content:
-        score += 0.2
-    
-    # Links bonus
-    if "Document Links:" in doc_content:
-        score += 0.2
-    
-    return min(score, 1.0)
-
-def calculate_recency_bonus(document):
-    """Calculate bonus based on recency indicators"""
-    doc_content = document.page_content.lower()
-    score = 0.0
-    
-    # Look for recent dates or update indicators
-    recent_indicators = [
-        'latest', 'recent', 'updated', 'new', '2024', '2025',
-        'current', 'revised', 'amended'
-    ]
-    
-    for indicator in recent_indicators:
-        if indicator in doc_content:
-            score += 0.1
-    
-    return min(score, 1.0)
-
-def advanced_document_retrieval(query, vector_db, embeddings, k=20):
-    """
-    Advanced retrieval that combines multiple search strategies
-    """
-    try:
-        # Get query embedding once for reuse
-        query_embedding = embeddings.embed_query(query)
-        
-        # 1. Get initial candidates using vector similarity
-        retriever = vector_db.as_retriever(search_kwargs={"k": k})
-        initial_docs = retriever.get_relevant_documents(query)
-        
-        # 2. Enhanced re-ranking with multiple factors
-        scored_docs = []
-        for doc in initial_docs:
-            score = enhanced_relevance_score(query, doc, embeddings, query_embedding)
-            scored_docs.append((doc, score))
-        
-        # Sort by enhanced relevance score
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        # 3. Diversity-aware selection to avoid too many similar chunks
-        final_docs = diversity_aware_selection(scored_docs, max_docs=6)
-        
-        return final_docs
-        
-    except Exception as e:
-        st.error(f"Error in advanced document retrieval: {e}")
-        # Fallback to basic retrieval
-        retriever = vector_db.as_retriever(search_kwargs={"k": 6})
-        return retriever.get_relevant_documents(query)
-
-def diversity_aware_selection(scored_docs, max_docs=6, similarity_threshold=0.85):
-    """
-    Select documents while maintaining diversity to avoid redundant information
-    """
-    if not scored_docs:
-        return []
-    
-    selected_docs = []
-    selected_embeddings = []
-    
-    # Always include the top-scored document
-    top_doc, top_score = scored_docs[0]
-    selected_docs.append(top_doc)
-    
-    try:
-        # Get embedding for diversity comparison (simplified content for embedding)
-        content_for_embedding = top_doc.page_content[:500]  # First 500 chars
-        top_embedding = st.session_state.get('hf_embedding').embed_documents([content_for_embedding])[0]
-        selected_embeddings.append(top_embedding)
-    except:
-        selected_embeddings.append(None)
-    
-    # Select remaining documents with diversity consideration
-    for doc, score in scored_docs[1:]:
-        if len(selected_docs) >= max_docs:
-            break
-            
-        # Check diversity against already selected documents
-        is_diverse = True
-        
-        try:
-            if selected_embeddings and selected_embeddings[0] is not None:
-                content_for_embedding = doc.page_content[:500]
-                doc_embedding = st.session_state.get('hf_embedding').embed_documents([content_for_embedding])[0]
-                
-                for selected_emb in selected_embeddings:
-                    if selected_emb is not None:
-                        similarity = cosine_similarity([doc_embedding], [selected_emb])[0][0]
-                        if similarity > similarity_threshold:
-                            is_diverse = False
-                            break
-                
-                if is_diverse:
-                    selected_docs.append(doc)
-                    selected_embeddings.append(doc_embedding)
-                elif score > 0.7:  # Include high-scoring docs even if similar
-                    selected_docs.append(doc)
-                    selected_embeddings.append(doc_embedding)
-        except:
-            # If embedding comparison fails, include based on source diversity
-            doc_source = doc.metadata.get('source', '')
-            selected_sources = {d.metadata.get('source', '') for d in selected_docs}
-            
-            if doc_source not in selected_sources or score > 0.8:
-                selected_docs.append(doc)
-                selected_embeddings.append(None)
-    
-    return selected_docs
-
-# Enhanced version of the existing function
-def re_rank_documents(query, documents, embeddings):
-    """Enhanced re-ranking with better relevance scoring"""
-    if not documents:
-        return []
-
-    if embeddings is None:
-        st.warning("Embeddings not available, using original document order")
-        return documents
-    
-    try:
-        # Use the enhanced relevance scoring
-        query_embedding = embeddings.embed_query(query)
-        scored_docs = []
-        
-        for doc in documents:
-            score = enhanced_relevance_score(query, doc, embeddings, query_embedding)
-            scored_docs.append((doc, score))
-        
-        # Filter by minimum threshold
-        RELEVANCE_THRESHOLD = 0.15  # Slightly higher threshold
-        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_THRESHOLD]
-        
-        if not scored_docs:
-            st.warning("No documents passed enhanced relevance threshold, using original documents")
-            return documents[:6]
-        
-        # Sort by enhanced score
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        # Apply diversity-aware selection
-        final_docs = diversity_aware_selection(scored_docs, max_docs=6)
-        
-        return final_docs
-        
-    except Exception as e:
-        st.error(f"Error in enhanced re-ranking: {e}")
-        return documents[:6]
-
-# Modified custom retrieval function
-def custom_retrieval_with_enhanced_reranking(llm, prompt, vector_db, embeddings):
-    """Create a custom retrieval chain with enhanced re-ranking"""
-    
-    def retrieval_function(query_dict):
-        query = query_dict["input"]
-        
-        # Use advanced document retrieval
-        retrieved_docs = advanced_document_retrieval(query, vector_db, embeddings, k=20)
-        
-        # Take top 6 for final processing
-        final_docs = retrieved_docs[:6]
-        
-        # Create and invoke document chain
-        document_chain = create_stuff_documents_chain(llm, prompt)
-        result = document_chain.invoke({"input": query, "context": final_docs})
-        
-        return {"answer": result, "context": final_docs}
-    
-    return retrieval_function
-
-# Rest of your existing functions remain the same...
 def enhanced_web_scrape(url):
     try:
         headers = {
@@ -750,7 +434,64 @@ def enhance_documents_before_chunking(documents):
     
     return enhanced_documents
 
-# Session state initialization
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        return final_ranked_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -766,7 +507,7 @@ if 'hf_embedding' not in st.session_state:
 if 'prompt' not in st.session_state:
     st.session_state['prompt'] = None
 
-st.title("Web GEN-ie - Enhanced Relevance Search")
+st.title("Web GEN-ie")
 
 st.subheader("Azure OpenAI Configuration")
 
@@ -814,7 +555,7 @@ if not st.session_state['docs_loaded']:
             st.success(f"Total loaded documents: {len(st.session_state['loaded_docs'])}")
             
             if config_complete and st.session_state['loaded_docs']:
-                with st.spinner("Processing documents with enhanced relevance search..."):
+                with st.spinner("Processing documents with embedded links..."):
                     try:
                         llm = AzureChatOpenAI(
                             azure_endpoint=azure_endpoint,
@@ -861,50 +602,39 @@ Answer:"""
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        # Use the enhanced custom retrieval function
-                        st.session_state['retrieval_chain'] = custom_retrieval_with_enhanced_reranking(
-                            llm, st.session_state['prompt'], st.session_state['vector_db'], st.session_state['hf_embedding']
-                        )
+                        def custom_retrieval_with_reranking(query_dict):
+                            query = query_dict["input"]
+    
+                            raw_retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
+                            raw_docs = raw_retriever.get_relevant_documents(query)
+    
+                            reranked_docs = re_rank_documents(query, raw_docs, st.session_state['hf_embedding'])
+                            final_docs = reranked_docs[:6]
+    
+                            document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
+                            result = document_chain.invoke({"input": query, "context": final_docs})
+    
+                            return {"answer": result, "context": final_docs}
+
+                        st.session_state['retrieval_chain'] = custom_retrieval_with_reranking
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("✅ Documents processed with enhanced relevance search and ready for querying!")
-                        
-                        # Display enhancement summary
-                        st.info("""
-                        **Enhanced Relevance Search Features Activated:**
-                        - ✅ Multi-factor relevance scoring (semantic + keyword + source + document type)
-                        - ✅ Source-aware matching for domain-specific queries
-                        - ✅ Document type prioritization (acts, circulars, guidelines)
-                        - ✅ Content quality assessment
-                        - ✅ Diversity-aware selection to avoid redundant chunks
-                        - ✅ Recency bonus for recent updates
-                        """)
+                        st.success("Documents processed with embedded links and ready for querying!")
                     
                     except Exception as e:
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
-st.subheader("Ask Questions - Enhanced Search")
+st.subheader("Ask Questions")
 query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
-# Add search configuration options
-with st.expander("🔧 Advanced Search Settings"):
-    col1, col2 = st.columns(2)
-    with col1:
-        search_k = st.slider("Initial retrieval count (k)", 10, 30, 20, help="Number of documents to retrieve initially before re-ranking")
-        diversity_threshold = st.slider("Diversity threshold", 0.7, 0.95, 0.85, 0.05, help="Similarity threshold for diversity filtering")
-    with col2:
-        relevance_threshold = st.slider("Relevance threshold", 0.1, 0.5, 0.15, 0.05, help="Minimum relevance score for document inclusion")
-        max_final_docs = st.slider("Final document count", 3, 10, 6, help="Maximum number of documents to use for answer generation")
-
 show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
-show_scores = st.checkbox("Show relevance scores for retrieved chunks", value=False)
 
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state.get('vector_db') and st.session_state.get('llm'):
-        with st.spinner("Searching with enhanced relevance scoring..."):
+        with st.spinner("Searching and generating answer..."):
             try:
                 if st.session_state.get('hf_embedding') is None:
                     st.info("Initializing embeddings...")
@@ -915,107 +645,23 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                     prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
                     st.session_state['prompt'] = prompt
                 
-                # Show search progress
-                search_progress = st.progress(0)
-                search_status = st.empty()
-                
-                search_status.text("🔍 Performing initial vector search...")
-                search_progress.progress(25)
-                
-                # Get initial candidates
-                retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": search_k})
-                initial_docs = retriever.get_relevant_documents(query)
-                
-                search_status.text("📊 Calculating enhanced relevance scores...")
-                search_progress.progress(50)
-                
-                # Enhanced re-ranking with user-defined parameters
-                query_embedding = st.session_state['hf_embedding'].embed_query(query)
-                scored_docs = []
-                
-                for doc in initial_docs:
-                    score = enhanced_relevance_score(query, doc, st.session_state['hf_embedding'], query_embedding)
-                    scored_docs.append((doc, score))
-                
-                # Filter by relevance threshold
-                filtered_docs = [(doc, score) for doc, score in scored_docs if score >= relevance_threshold]
-                
-                search_status.text("🎯 Applying diversity-aware selection...")
-                search_progress.progress(75)
-                
-                if not filtered_docs:
-                    st.warning(f"No documents passed relevance threshold of {relevance_threshold}, using top documents")
-                    scored_docs.sort(key=lambda x: x[1], reverse=True)
-                    final_docs = [doc for doc, score in scored_docs[:max_final_docs]]
-                else:
-                    scored_docs = filtered_docs
-                    scored_docs.sort(key=lambda x: x[1], reverse=True)
-                    final_docs = diversity_aware_selection(scored_docs, max_docs=max_final_docs, similarity_threshold=diversity_threshold)
-                
-                search_status.text("🤖 Generating response...")
-                search_progress.progress(90)
-                
-                # Generate response
-                document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-                result = document_chain.invoke({"input": query, "context": final_docs})
-                
-                search_progress.progress(100)
-                search_status.text("✅ Search completed!")
-                
-                # Clear progress indicators after a short delay
-                import time
-                time.sleep(1)
-                search_progress.empty()
-                search_status.empty()
-                
-                response = {"answer": result, "context": final_docs}
+                response = st.session_state['retrieval_chain']({"input": query})
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
-                
-                # Show search statistics
-                with st.expander("📈 Search Statistics"):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Initial Retrieval", len(initial_docs))
-                        st.metric("Above Threshold", len(filtered_docs) if filtered_docs else 0)
-                    with col2:
-                        st.metric("Final Selection", len(final_docs))
-                        avg_score = sum(score for _, score in scored_docs[:len(final_docs)]) / len(final_docs) if final_docs else 0
-                        st.metric("Avg Relevance Score", f"{avg_score:.3f}")
-                    with col3:
-                        sources_count = len(set(doc.metadata.get('source', '') for doc in final_docs))
-                        st.metric("Unique Sources", sources_count)
-                        links_count = sum(1 for doc in final_docs if doc.metadata.get('document_links'))
-                        st.metric("Docs with Links", links_count)
                 
                 if show_chunks and 'context' in response:
                     retrieved_docs = response['context']
                     if retrieved_docs:
                         display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
                         
-                        if show_scores:
-                            st.subheader("🎯 Relevance Scores")
-                            score_data = []
-                            for i, doc in enumerate(retrieved_docs):
-                                # Recalculate score for display
-                                score = enhanced_relevance_score(query, doc, st.session_state['hf_embedding'])
-                                source = doc.metadata.get('source', 'Unknown')
-                                has_links = bool(doc.metadata.get('document_links'))
-                                score_data.append({
-                                    'Rank': i+1,
-                                    'Score': f"{score:.3f}",
-                                    'Source': source.split('/')[-1] if '/' in source else source,
-                                    'Has Links': "✅" if has_links else "❌",
-                                    'Length': len(doc.page_content)
-                                })
-                            
-                            st.table(score_data)
-                        
-                        links_used = sum(1 for doc in retrieved_docs if "Source URL:" in doc.page_content)
+                        links_used = 0
+                        for doc in retrieved_docs:
+                            if "Source URL:" in doc.page_content:
+                                links_used += 1
                         
                         if links_used > 0:
-                            st.success(f"🔗 {links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links")
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links that were sent to the LLM")
                         else:
                             st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
                     else:
