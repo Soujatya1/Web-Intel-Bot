@@ -96,8 +96,7 @@ def filter_urls_by_query(query, urls):
     # Query-specific URL mapping with priority order
     url_keywords = {
        "acts": [
-        "irdai.gov.in/acts",
-        "uidai.gov.in/en/about-uidai/legal-framework"
+        "irdai.gov.in/acts"
     ],
     "rules": [
         "https://irdai.gov.in/rules",
