@@ -16,20 +16,50 @@ from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
 
-HARDCODED_WEBSITES = [
-    "https://irdai.gov.in/acts",
-    "https://irdai.gov.in/home",
-    "https://irdai.gov.in/rules",
-    "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-    "https://irdai.gov.in/updated-regulations",
-    "https://irdai.gov.in/notifications",
-    "https://irdai.gov.in/circulars",
-    "https://irdai.gov.in/guidelines",
-    "https://irdai.gov.in/orders1",
-    "https://enforcementdirectorate.gov.in/fema",
-    "https://enforcementdirectorate.gov.in/fema?page=1",
-    "https://enforcementdirectorate.gov.in/fema?page=2"
-]
+HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
+                      "https://irdai.gov.in/home",
+                      "https://irdai.gov.in/rules",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/updated-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/circulars",
+                      "https://irdai.gov.in/guidelines",
+                      "https://irdai.gov.in/orders1",
+                      "https://irdai.gov.in/notices1",
+                      "https://irdai.gov.in/exposure-drafts",
+                      "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
+                      "https://irdai.gov.in/information-under-section-4-1-b-of-rti-act-2005",
+                      "https://irdai.gov.in/information-under-section-4-1-d-of-rti-act-2005",
+                      "https://irdai.gov.in/rti-act",
+                      "https://irdai.gov.in/cic-orders",
+                      "https://irdai.gov.in/rules2",
+                      "https://irdai.gov.in/rti-2005/tenders",
+                      "https://irdai.gov.in/web/guest/faqs1",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/antimoney-laundering",
+                      "https://irdai.gov.in/other-communication",
+                      "https://irdai.gov.in/directory-of-employees",
+                      "https://irdai.gov.in/warnings-and-penalties",
+                      "https://uidai.gov.in/en/",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/rules",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/notifications",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/regulations",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/circulars",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/judgements",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-regulation",
+                      "https://uidai.gov.in/en/about-uidai/legal-framework/updated-rules",
+                      "https://enforcementdirectorate.gov.in/pmla",
+                      "https://enforcementdirectorate.gov.in/pmla?page=1",
+                      "https://enforcementdirectorate.gov.in/fema",
+                      "https://enforcementdirectorate.gov.in/fema?page=1",
+                      "https://enforcementdirectorate.gov.in/fema?page=2",
+                      "https://enforcementdirectorate.gov.in/fema?page=3",
+                      "https://enforcementdirectorate.gov.in/bns",
+                      "https://enforcementdirectorate.gov.in/bnss",
+                      "https://enforcementdirectorate.gov.in/bsa",
+                      "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
+                      ]
 
 SYSTEM_PROMPT_TEMPLATE = """
 You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
@@ -62,7 +92,6 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-# Query Enhancement Prompt Template
 QUERY_ENHANCEMENT_PROMPT = """
 You are an expert in Indian regulatory and insurance domain. Given a user question, extract the most relevant keywords and phrases that would help in document retrieval.
 
@@ -75,7 +104,7 @@ Focus on:
 
 User Question: {question}
 
-Extract 8-12 most relevant keywords/phrases for document retrieval. Return them as a comma-separated list.
+Extract 5-6 most relevant keywords/phrases for document retrieval. Return them as a comma-separated list.
 Focus on terms that would likely appear in regulatory documents.
 
 Keywords:"""
