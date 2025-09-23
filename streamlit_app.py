@@ -110,7 +110,7 @@ Extract ONLY the most directly relevant keywords from this query. Do not expand 
 
 Keywords (comma-separated, max 6):"""
 
-RELEVANCE_SCORE_THRESHOLD = 0.3
+RELEVANCE_SCORE_THRESHOLD = 0.7
 
 def extract_keywords_with_llm(query, llm):
     """Extract keywords from query using LLM for better retrieval"""
