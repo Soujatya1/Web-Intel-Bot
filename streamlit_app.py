@@ -169,119 +169,208 @@ def extract_keywords_fallback(query):
     
     return keywords[:10]
 
-def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
-    """Enhanced retrieval using LLM-extracted keywords"""
+def enhanced_retrieval_with_quality_filter(query, vector_db, hf_embedding, llm, k=6, extraction_method="conservative"):
+    """Enhanced retrieval with quality filtering and relevance thresholds"""
     try:
-        # Step 1: Extract keywords using LLM
-        st.info("🔍 Extracting keywords using LLM...")
-        keywords, keywords_text = extract_keywords_with_llm(query, llm)
+        # Step 1: Extract keywords
+        st.info(f"🔍 Extracting keywords using {extraction_method} method...")
         
-        # Display extracted keywords
-        with st.expander("📋 Extracted Keywords for Retrieval"):
-            st.write("**Keywords extracted by LLM:**")
-            st.code(keywords_text)
-            st.write("**Processed keywords list:**")
+        if extraction_method == "conservative":
+            keywords, keywords_text = extract_keywords_with_llm(query, llm, method="conservative")
+        elif extraction_method == "hybrid":
+            keywords, keywords_text = extract_keywords_hybrid(query, llm)
+        elif extraction_method == "simple":
+            keywords = extract_keywords_simple(query)
+            keywords_text = f"Simple extraction: {keywords}"
+        else:
+            keywords, keywords_text = extract_keywords_with_llm(query, llm, method="conservative")
+        
+        # Display keyword analysis
+        with st.expander(f"📋 Keyword Analysis ({extraction_method})"):
+            st.write("**Original Query:**")
+            st.code(query)
+            st.write("**Keywords:**")
             st.write(", ".join(f"`{kw}`" for kw in keywords))
         
-        # Step 2: Create enhanced search queries
-        enhanced_queries = []
+        # Step 2: Multi-level quality thresholds
+        QUALITY_THRESHOLDS = {
+            'excellent': 0.8,    # Very high similarity
+            'good': 0.6,         # Good similarity  
+            'acceptable': 0.4,   # Minimum acceptable
+            'poor': 0.2          # Poor but might be relevant
+        }
         
-        # Original query
-        enhanced_queries.append(query)
+        # Step 3: Retrieve with quality filtering
+        enhanced_queries = [query]  # Start with original
         
-        # Keywords-only query
-        keywords_query = " ".join(keywords)
-        enhanced_queries.append(keywords_query)
+        # Add keyword queries conservatively
+        if keywords and len(keywords) <= 6:
+            keywords_query = " ".join(keywords)
+            enhanced_queries.append(keywords_query)
         
-        # Combined query with weights
-        combined_query = f"{query} {' '.join(keywords[:6])}"
-        enhanced_queries.append(combined_query)
+        all_candidates = {}
+        query_contributions = {}
         
-        # Step 3: Retrieve documents for each query
-        all_retrieved_docs = []
-        doc_scores = {}
-        
-        st.info("🔎 Performing enhanced retrieval...")
+        st.info(f"🔎 Searching with quality filtering...")
         
         for i, search_query in enumerate(enhanced_queries):
             try:
-                # Retrieve documents
-                docs = vector_db.similarity_search_with_score(search_query, k=k*2)
+                # Get more candidates to filter from
+                docs_with_scores = vector_db.similarity_search_with_score(search_query, k=k*3)
                 
-                # Weight documents based on query type
-                query_weight = [1.0, 0.8, 0.9][i]  # Original, keywords-only, combined
+                query_weight = [1.0, 0.6][i] if i < 2 else 0.5
                 
-                for doc, score in docs:
+                for doc, distance_score in docs_with_scores:
+                    # Convert distance to similarity (0-1 scale)
+                    similarity = 1 / (1 + distance_score)
+                    weighted_similarity = similarity * query_weight
+                    
                     doc_id = (doc.page_content[:100], doc.metadata.get('source', ''))
                     
-                    if doc_id not in doc_scores:
-                        doc_scores[doc_id] = {'doc': doc, 'max_score': 0, 'query_matches': []}
+                    if doc_id not in all_candidates:
+                        all_candidates[doc_id] = {
+                            'doc': doc,
+                            'best_similarity': 0,
+                            'distance_score': distance_score,
+                            'query_matches': []
+                        }
+                        query_contributions[doc_id] = []
                     
-                    weighted_score = (1 / (score + 1e-6)) * query_weight  # Convert distance to similarity
-                    doc_scores[doc_id]['max_score'] = max(doc_scores[doc_id]['max_score'], weighted_score)
-                    doc_scores[doc_id]['query_matches'].append(f"Query {i+1}: {weighted_score:.3f}")
+                    # Track best similarity
+                    if weighted_similarity > all_candidates[doc_id]['best_similarity']:
+                        all_candidates[doc_id]['best_similarity'] = weighted_similarity
+                        all_candidates[doc_id]['distance_score'] = distance_score
+                    
+                    query_contributions[doc_id].append({
+                        'query_num': i+1,
+                        'query': search_query,
+                        'similarity': weighted_similarity,
+                        'weight': query_weight
+                    })
                     
             except Exception as e:
-                st.warning(f"Retrieval failed for query {i+1}: {e}")
+                st.warning(f"Query {i+1} failed: {e}")
                 continue
         
-        # Step 4: Re-rank and select top documents
-        if doc_scores:
-            # Sort by combined score
-            ranked_docs = sorted(
-                doc_scores.values(), 
-                key=lambda x: x['max_score'], 
-                reverse=True
-            )
+        # Step 4: Quality-based filtering and scoring
+        quality_filtered_docs = []
+        
+        for doc_id, candidate in all_candidates.items():
+            doc = candidate['doc']
+            base_similarity = candidate['best_similarity']
             
-            # Apply additional keyword-based filtering
-            final_docs = []
-            for doc_info in ranked_docs[:k*2]:
-                doc = doc_info['doc']
-                
-                # Calculate keyword overlap score
-                doc_text_lower = doc.page_content.lower()
-                keyword_matches = sum(1 for kw in keywords if kw.lower() in doc_text_lower)
-                keyword_score = keyword_matches / len(keywords) if keywords else 0
-                
-                # Combine with retrieval score
-                final_score = doc_info['max_score'] * (1 + keyword_score * 0.5)
-                
-                final_docs.append({
-                    'doc': doc,
-                    'final_score': final_score,
-                    'keyword_matches': keyword_matches,
-                    'query_matches': doc_info['query_matches']
-                })
+            # Calculate keyword overlap bonus
+            doc_text_lower = doc.page_content.lower()
+            keyword_matches = sum(1 for kw in keywords if kw.lower() in doc_text_lower)
+            keyword_ratio = keyword_matches / len(keywords) if keywords else 0
+            keyword_bonus = keyword_ratio * 0.1
             
-            # Final ranking
-            final_docs.sort(key=lambda x: x['final_score'], reverse=True)
+            # Calculate query term overlap
+            query_terms = set(query.lower().split())
+            doc_terms = set(doc_text_lower.split())
+            term_overlap = len(query_terms.intersection(doc_terms)) / len(query_terms) if query_terms else 0
+            term_bonus = term_overlap * 0.15
             
-            # Return top k documents
-            selected_docs = [doc_info['doc'] for doc_info in final_docs[:k]]
+            # Final quality score
+            final_score = base_similarity + keyword_bonus + term_bonus
             
-            # Display retrieval stats
-            with st.expander("📊 Enhanced Retrieval Statistics"):
-                st.write(f"**Total unique documents found:** {len(doc_scores)}")
-                st.write(f"**Final selected documents:** {len(selected_docs)}")
-                
-                st.write("**Top 3 selected documents:**")
-                for i, doc_info in enumerate(final_docs[:3]):
-                    st.write(f"**Document {i+1}:**")
-                    st.write(f"- Source: {doc_info['doc'].metadata.get('source', 'Unknown')}")
-                    st.write(f"- Final Score: {doc_info['final_score']:.3f}")
-                    st.write(f"- Keyword Matches: {doc_info['keyword_matches']}/{len(keywords)}")
-                    st.write(f"- Query Match Details: {', '.join(doc_info['query_matches'])}")
+            # Determine quality level
+            quality_level = 'poor'
+            for level, threshold in sorted(QUALITY_THRESHOLDS.items(), key=lambda x: x[1], reverse=True):
+                if final_score >= threshold:
+                    quality_level = level
+                    break
             
-            return selected_docs
-            
+            quality_filtered_docs.append({
+                'doc': doc,
+                'final_score': final_score,
+                'base_similarity': base_similarity,
+                'keyword_matches': keyword_matches,
+                'keyword_ratio': keyword_ratio,
+                'term_overlap': term_overlap,
+                'quality_level': quality_level,
+                'distance_score': candidate['distance_score'],
+                'query_contributions': query_contributions[doc_id]
+            })
+        
+        # Step 5: Apply quality thresholds
+        # First try to get high-quality documents
+        excellent_docs = [d for d in quality_filtered_docs if d['quality_level'] == 'excellent']
+        good_docs = [d for d in quality_filtered_docs if d['quality_level'] == 'good']
+        acceptable_docs = [d for d in quality_filtered_docs if d['quality_level'] == 'acceptable']
+        poor_docs = [d for d in quality_filtered_docs if d['quality_level'] == 'poor']
+        
+        # Select documents with quality preference
+        selected_docs_info = []
+        
+        # Prioritize higher quality documents
+        if len(excellent_docs) >= k:
+            selected_docs_info = sorted(excellent_docs, key=lambda x: x['final_score'], reverse=True)[:k]
+        elif len(excellent_docs + good_docs) >= k:
+            combined = excellent_docs + good_docs
+            selected_docs_info = sorted(combined, key=lambda x: x['final_score'], reverse=True)[:k]
+        elif len(excellent_docs + good_docs + acceptable_docs) >= k:
+            combined = excellent_docs + good_docs + acceptable_docs
+            selected_docs_info = sorted(combined, key=lambda x: x['final_score'], reverse=True)[:k]
         else:
-            st.warning("No documents retrieved. Falling back to simple retrieval.")
-            return vector_db.similarity_search(query, k=k)
+            # Use all available documents if we don't have enough high-quality ones
+            all_docs = excellent_docs + good_docs + acceptable_docs + poor_docs
+            if all_docs:
+                selected_docs_info = sorted(all_docs, key=lambda x: x['final_score'], reverse=True)[:k]
+            else:
+                st.warning("No documents met any quality threshold!")
+                return []
+        
+        # Extract just the Document objects
+        selected_docs = [doc_info['doc'] for doc_info in selected_docs_info]
+        
+        # Step 6: Display detailed quality analysis
+        with st.expander("📊 Quality-Filtered Retrieval Analysis"):
+            st.write("**Quality Distribution:**")
+            quality_counts = {
+                'Excellent': len(excellent_docs),
+                'Good': len(good_docs), 
+                'Acceptable': len(acceptable_docs),
+                'Poor': len(poor_docs)
+            }
             
+            for level, count in quality_counts.items():
+                if count > 0:
+                    st.write(f"- {level}: {count} documents")
+            
+            st.write(f"\n**Selection Strategy:**")
+            if selected_docs_info:
+                levels_used = set(d['quality_level'] for d in selected_docs_info)
+                st.write(f"- Used quality levels: {', '.join(levels_used)}")
+                st.write(f"- Selected: {len(selected_docs)} documents")
+                
+                st.write(f"\n**Quality Thresholds Used:**")
+                for level, threshold in QUALITY_THRESHOLDS.items():
+                    st.write(f"- {level.title()}: ≥{threshold}")
+            
+            st.write(f"\n**Top 3 Selected Documents:**")
+            for i, doc_info in enumerate(selected_docs_info[:3]):
+                st.write(f"**Document {i+1}:**")
+                st.write(f"  - Quality Level: **{doc_info['quality_level'].title()}**")
+                st.write(f"  - Final Score: {doc_info['final_score']:.3f}")
+                st.write(f"  - Base Similarity: {doc_info['base_similarity']:.3f}")
+                st.write(f"  - Distance Score: {doc_info['distance_score']:.3f}")
+                st.write(f"  - Keywords Matched: {doc_info['keyword_matches']}/{len(keywords)}")
+                st.write(f"  - Term Overlap: {doc_info['term_overlap']:.2%}")
+                st.write(f"  - Source: {doc_info['doc'].metadata.get('source', 'Unknown')}")
+                
+                # Show query contributions
+                contributions = doc_info['query_contributions']
+                if contributions:
+                    st.write(f"  - Query Matches:")
+                    for contrib in contributions:
+                        st.write(f"    * Q{contrib['query_num']} (weight {contrib['weight']}): {contrib['similarity']:.3f}")
+        
+        return selected_docs
+        
     except Exception as e:
-        st.error(f"Enhanced retrieval failed: {e}")
-        st.warning("Falling back to simple retrieval method.")
+        st.error(f"Quality-filtered retrieval failed: {e}")
+        st.info("Falling back to simple search...")
         return vector_db.similarity_search(query, k=k)
 
 def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
