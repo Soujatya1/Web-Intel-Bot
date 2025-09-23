@@ -384,7 +384,7 @@ def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
             self.k = k
         
         def get_relevant_documents(self, query):
-            return enhanced_retrieval_with_keywords(
+            return enhanced_retrieval_with_quality_filter(
                 query, self.vector_db, self.hf_embedding, self.llm, self.k
             )
         
