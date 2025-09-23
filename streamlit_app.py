@@ -93,21 +93,22 @@ Provide a comprehensive answer using the available context, including relevant d
 """
 
 QUERY_ENHANCEMENT_PROMPT = """
-You are an expert in Indian regulatory and insurance domain. Given a user question, extract the most relevant keywords and phrases that would help in document retrieval.
+You are a precise keyword extractor for document retrieval. Your job is to extract ONLY the most essential keywords that are directly related to what the user is asking for.
 
-Focus on:
-1. Regulatory terms (acts, circulars, guidelines, amendments, notifications)
-2. Domain-specific terms (insurance, IRDAI, UIDAI, PMLA, FEMA)
-3. Time-related keywords (recent, latest, new, updated, 2024, 2025)
-4. Specific regulatory concepts and entities
-5. Legal and compliance terminology
+STRICT RULES:
+1. DO NOT add domain context unless explicitly mentioned in the query
+2. DO NOT add synonyms or related terms unless they are essential
+3. FOCUS on the exact words and concepts the user mentioned
+4. If user asks about "recent X", include both "recent" and "X"
+5. If user asks about specific document types (gazette, circular, etc.), keep those exact terms
+6. Extract the core nouns, adjectives, and specific identifiers from the query
+7. Limit to 4-6 keywords maximum
 
-User Question: {question}
+User Query: "{question}"
 
-Extract 5-6 most relevant keywords/phrases for document retrieval. Return them as a comma-separated list.
-Focus on terms that would likely appear in regulatory documents.
+Extract ONLY the most directly relevant keywords from this query. Do not expand with domain knowledge.
 
-Keywords:"""
+Keywords (comma-separated, max 6):"""
 
 RELEVANCE_SCORE_THRESHOLD = 0.3
 
