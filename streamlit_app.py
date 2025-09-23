@@ -175,15 +175,12 @@ def enhanced_retrieval_with_quality_filter(query, vector_db, hf_embedding, llm, 
         # Step 1: Extract keywords
         st.info(f"🔍 Extracting keywords using {extraction_method} method...")
         
-        if extraction_method == "conservative":
-            keywords, keywords_text = extract_keywords_with_llm(query, llm, method="conservative")
-        elif extraction_method == "hybrid":
-            keywords, keywords_text = extract_keywords_hybrid(query, llm)
-        elif extraction_method == "simple":
-            keywords = extract_keywords_simple(query)
-            keywords_text = f"Simple extraction: {keywords}"
-        else:
-            keywords, keywords_text = extract_keywords_with_llm(query, llm, method="conservative")
+        # Simplified keyword extraction - only use the defined function
+        if extraction_method in ["conservative", "hybrid"]:
+            keywords, keywords_text = extract_keywords_with_llm(query, llm)
+        else:  # fallback to simple method
+            keywords = extract_keywords_fallback(query)
+            keywords_text = f"Fallback extraction: {', '.join(keywords)}"
         
         # Display keyword analysis
         with st.expander(f"📋 Keyword Analysis ({extraction_method})"):
