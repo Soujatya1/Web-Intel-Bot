@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
+import numpy as np
 
 HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://irdai.gov.in/home",
@@ -110,7 +111,144 @@ Extract ONLY the most directly relevant keywords from this query. Do not expand 
 
 Keywords (comma-separated, max 6):"""
 
-RELEVANCE_SCORE_THRESHOLD = 0.3
+# Changed threshold to 0.80
+RELEVANCE_SCORE_THRESHOLD = 0.80
+
+def calculate_comprehensive_relevance_score(query, document, embeddings):
+    """
+    Calculate a comprehensive relevance score combining semantic similarity,
+    keyword matching, and domain-specific factors
+    """
+    try:
+        # 1. Semantic similarity using embeddings (primary factor)
+        query_embedding = embeddings.embed_query(query)
+        document_embedding = embeddings.embed_documents([document.page_content])[0]
+        semantic_similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
+        
+        # 2. Keyword matching score
+        query_words = set(query.lower().split())
+        doc_words = set(document.page_content.lower().split())
+        
+        # Exact keyword matches
+        exact_matches = len(query_words.intersection(doc_words))
+        keyword_score = exact_matches / len(query_words) if query_words else 0
+        
+        # 3. Domain-specific keyword boost
+        domain_keywords = {
+            'irdai': 0.2, 'insurance': 0.15, 'act': 0.12, 'regulation': 0.12,
+            'circular': 0.1, 'amendment': 0.1, 'guideline': 0.1,
+            'pmla': 0.2, 'fema': 0.2, 'uidai': 0.2, 'aadhaar': 0.15,
+            'notification': 0.08, 'policy': 0.08, 'compliance': 0.08,
+            'recent': 0.06, 'latest': 0.06, 'new': 0.06, 'updated': 0.06
+        }
+        
+        domain_boost = 0
+        doc_lower = document.page_content.lower()
+        query_lower = query.lower()
+        
+        for keyword, weight in domain_keywords.items():
+            if keyword in query_lower and keyword in doc_lower:
+                domain_boost += weight
+        
+        # 4. Document quality indicators
+        quality_boost = 0
+        
+        # Has source URL
+        if "Source URL:" in document.page_content:
+            quality_boost += 0.08
+        
+        # Has document links
+        if "=== RELEVANT DOCUMENT LINKS ===" in document.page_content:
+            quality_boost += 0.08
+        
+        # Content length (optimal range bonus)
+        content_length = len(document.page_content)
+        if 500 <= content_length <= 3000:  # Optimal chunk size
+            quality_boost += 0.05
+        
+        # 5. Recency indicators (if available)
+        recency_boost = 0
+        recency_terms = ['2024', '2025', 'recent', 'latest', 'updated', 'new']
+        for term in recency_terms:
+            if term in query_lower and term in doc_lower:
+                recency_boost += 0.04
+        
+        # Combine all scores with adjusted weights to reach higher scores
+        final_score = (
+            semantic_similarity * 0.60 +  # Increased weight on semantic similarity
+            keyword_score * 0.20 +        # Keyword matching
+            domain_boost * 0.12 +         # Domain relevance
+            quality_boost * 0.05 +        # Document quality
+            recency_boost * 0.03          # Recency indicators
+        )
+        
+        # Apply a boost for high-quality matches
+        if semantic_similarity > 0.7 and keyword_score > 0.5:
+            final_score = min(final_score * 1.1, 1.0)
+        
+        # Normalize to ensure score doesn't exceed 1.0
+        final_score = min(final_score, 1.0)
+        
+        return final_score
+        
+    except Exception as e:
+        st.warning(f"Error calculating relevance score: {e}")
+        # Fallback to keyword-based scoring
+        query_words = set(query.lower().split())
+        doc_words = set(document.page_content.lower().split())
+        exact_matches = len(query_words.intersection(doc_words))
+        return (exact_matches / len(query_words)) * 0.6 if query_words else 0.0
+
+def filter_chunks_by_relevance(query, chunks, embeddings, threshold=RELEVANCE_SCORE_THRESHOLD):
+    """
+    Filter chunks based on relevance score threshold and return scored chunks
+    """
+    scored_chunks = []
+    
+    st.info(f"Evaluating {len(chunks)} chunks with relevance threshold: {threshold}")
+    
+    for i, chunk in enumerate(chunks):
+        relevance_score = calculate_comprehensive_relevance_score(query, chunk, embeddings)
+        
+        scored_chunks.append({
+            'chunk': chunk,
+            'score': relevance_score,
+            'meets_threshold': relevance_score >= threshold
+        })
+    
+    # Sort by relevance score
+    scored_chunks.sort(key=lambda x: x['score'], reverse=True)
+    
+    # Filter chunks that meet threshold
+    qualifying_chunks = [sc for sc in scored_chunks if sc['meets_threshold']]
+    
+    # Display scoring statistics
+    with st.expander("Chunk Relevance Scoring Results"):
+        st.write(f"**Total chunks evaluated:** {len(chunks)}")
+        st.write(f"**Chunks meeting threshold ({threshold}):** {len(qualifying_chunks)}")
+        if scored_chunks:
+            st.write(f"**Highest score:** {max(sc['score'] for sc in scored_chunks):.3f}")
+            st.write(f"**Average score:** {np.mean([sc['score'] for sc in scored_chunks]):.3f}")
+        
+        st.write("**Top 5 Chunk Scores:**")
+        for i, sc in enumerate(scored_chunks[:5]):
+            status = "✅ Qualifying" if sc['meets_threshold'] else "❌ Below threshold"
+            source = sc['chunk'].metadata.get('source', 'Unknown')[:50]
+            st.write(f"{i+1}. Score: {sc['score']:.3f} - {status} - Source: {source}...")
+    
+    if not qualifying_chunks:
+        st.warning(f"No chunks met the relevance threshold of {threshold}. Consider lowering the threshold or refining your query.")
+        # Return top 3 chunks even if they don't meet threshold, but with warning
+        st.info("Returning top 3 chunks despite low scores to provide some response.")
+        return [sc['chunk'] for sc in scored_chunks[:3]], [sc['score'] for sc in scored_chunks[:3]]
+    
+    # Return qualifying chunks and their scores
+    qualifying_chunk_objects = [sc['chunk'] for sc in qualifying_chunks]
+    qualifying_scores = [sc['score'] for sc in qualifying_chunks]
+    
+    st.success(f"✅ {len(qualifying_chunks)} high-quality chunks selected for LLM processing")
+    
+    return qualifying_chunk_objects, qualifying_scores
 
 def extract_keywords_with_llm(query, llm):
     """Extract keywords from query using LLM for better retrieval"""
@@ -169,15 +307,15 @@ def extract_keywords_fallback(query):
     
     return keywords[:10]
 
-def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
-    """Enhanced retrieval using LLM-extracted keywords"""
+def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=8):
+    """Enhanced retrieval using LLM-extracted keywords with 0.80 threshold filtering"""
     try:
         # Step 1: Extract keywords using LLM
-        st.info("🔍 Extracting keywords using LLM...")
+        st.info("Extracting keywords using LLM...")
         keywords, keywords_text = extract_keywords_with_llm(query, llm)
         
         # Display extracted keywords
-        with st.expander("📋 Extracted Keywords for Retrieval"):
+        with st.expander("Extracted Keywords for Retrieval"):
             st.write("**Keywords extracted by LLM:**")
             st.code(keywords_text)
             st.write("**Processed keywords list:**")
@@ -197,16 +335,17 @@ def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
         combined_query = f"{query} {' '.join(keywords[:6])}"
         enhanced_queries.append(combined_query)
         
-        # Step 3: Retrieve documents for each query
+        # Step 3: Retrieve more documents initially to have candidates for filtering
+        initial_k = max(k * 4, 24)  # Retrieve more chunks for filtering
         all_retrieved_docs = []
         doc_scores = {}
         
-        st.info("🔎 Performing enhanced retrieval...")
+        st.info("Performing enhanced retrieval...")
         
         for i, search_query in enumerate(enhanced_queries):
             try:
                 # Retrieve documents
-                docs = vector_db.similarity_search_with_score(search_query, k=k*2)
+                docs = vector_db.similarity_search_with_score(search_query, k=initial_k)
                 
                 # Weight documents based on query type
                 query_weight = [1.0, 0.8, 0.9][i]  # Original, keywords-only, combined
@@ -225,55 +364,38 @@ def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
                 st.warning(f"Retrieval failed for query {i+1}: {e}")
                 continue
         
-        # Step 4: Re-rank and select top documents
+        # Step 4: Get all candidate documents
         if doc_scores:
-            # Sort by combined score
-            ranked_docs = sorted(
-                doc_scores.values(), 
-                key=lambda x: x['max_score'], 
-                reverse=True
+            candidate_docs = [doc_info['doc'] for doc_info in doc_scores.values()]
+            
+            # Step 5: Apply relevance threshold filtering
+            st.info("Applying relevance threshold filtering...")
+            filtered_docs, relevance_scores = filter_chunks_by_relevance(
+                query, candidate_docs, hf_embedding, RELEVANCE_SCORE_THRESHOLD
             )
             
-            # Apply additional keyword-based filtering
-            final_docs = []
-            for doc_info in ranked_docs[:k*2]:
-                doc = doc_info['doc']
+            # Step 6: Final ranking and selection
+            if filtered_docs:
+                # Limit to k documents for final processing
+                final_docs = filtered_docs[:k]
                 
-                # Calculate keyword overlap score
-                doc_text_lower = doc.page_content.lower()
-                keyword_matches = sum(1 for kw in keywords if kw.lower() in doc_text_lower)
-                keyword_score = keyword_matches / len(keywords) if keywords else 0
+                # Display retrieval stats
+                with st.expander("Enhanced Retrieval Statistics"):
+                    st.write(f"**Initial candidates found:** {len(candidate_docs)}")
+                    st.write(f"**Chunks meeting 0.80 threshold:** {len(filtered_docs)}")
+                    st.write(f"**Final selected documents:** {len(final_docs)}")
+                    
+                    st.write("**Top 3 selected documents with scores:**")
+                    for i, (doc, score) in enumerate(zip(final_docs[:3], relevance_scores[:3])):
+                        st.write(f"**Document {i+1}:**")
+                        st.write(f"- Source: {doc.metadata.get('source', 'Unknown')}")
+                        st.write(f"- Relevance Score: {score:.3f}")
+                        st.write(f"- Content Preview: {doc.page_content[:100]}...")
                 
-                # Combine with retrieval score
-                final_score = doc_info['max_score'] * (1 + keyword_score * 0.5)
-                
-                final_docs.append({
-                    'doc': doc,
-                    'final_score': final_score,
-                    'keyword_matches': keyword_matches,
-                    'query_matches': doc_info['query_matches']
-                })
-            
-            # Final ranking
-            final_docs.sort(key=lambda x: x['final_score'], reverse=True)
-            
-            # Return top k documents
-            selected_docs = [doc_info['doc'] for doc_info in final_docs[:k]]
-            
-            # Display retrieval stats
-            with st.expander("📊 Enhanced Retrieval Statistics"):
-                st.write(f"**Total unique documents found:** {len(doc_scores)}")
-                st.write(f"**Final selected documents:** {len(selected_docs)}")
-                
-                st.write("**Top 3 selected documents:**")
-                for i, doc_info in enumerate(final_docs[:3]):
-                    st.write(f"**Document {i+1}:**")
-                    st.write(f"- Source: {doc_info['doc'].metadata.get('source', 'Unknown')}")
-                    st.write(f"- Final Score: {doc_info['final_score']:.3f}")
-                    st.write(f"- Keyword Matches: {doc_info['keyword_matches']}/{len(keywords)}")
-                    st.write(f"- Query Match Details: {', '.join(doc_info['query_matches'])}")
-            
-            return selected_docs
+                return final_docs
+            else:
+                st.warning("No documents met the 0.80 relevance threshold. Returning top candidates with lower scores.")
+                return candidate_docs[:k]
             
         else:
             st.warning("No documents retrieved. Falling back to simple retrieval.")
@@ -285,7 +407,7 @@ def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
         return vector_db.similarity_search(query, k=k)
 
 def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
-    """Create a retrieval chain with enhanced keyword-based retrieval"""
+    """Create a retrieval chain with enhanced keyword-based retrieval and 0.80 threshold"""
     
     class EnhancedRetriever:
         def __init__(self, vector_db, hf_embedding, llm, k=6):
@@ -319,7 +441,7 @@ def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
             # Get query
             query = input_dict["input"]
             
-            # Retrieve documents
+            # Retrieve documents with 0.80 threshold
             docs = self.retriever.get_relevant_documents(query)
             
             # Generate answer
@@ -577,7 +699,7 @@ def load_hardcoded_websites():
                             for i, link_info in enumerate(ref_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         
-                        st.success(f"✅ Document links have been embedded into the text content for better retrieval")
+                        st.success(f"Document links have been embedded into the text content for better retrieval")
                 else:
                     st.write(f"No relevant document links found from {url}")
             
@@ -598,7 +720,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
-def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
+def display_chunks(chunks, title="Top Retrieved Chunks"):
     st.subheader(title)
     
     for i, chunk in enumerate(chunks[:3], 1):
@@ -691,8 +813,8 @@ if 'hf_embedding' not in st.session_state:
 if 'prompt' not in st.session_state:
     st.session_state['prompt'] = None
 
-st.title("🤖 Enhanced Web GEN-ie with LLM Keyword Extraction")
-st.markdown("*Powered by intelligent keyword extraction and enhanced document retrieval*")
+st.title("Enhanced Web GEN-ie with 0.80 Relevance Threshold")
+st.markdown("*Powered by intelligent keyword extraction and high-precision document retrieval (0.80 threshold)*")
 
 st.subheader("Azure OpenAI Configuration")
 
@@ -725,6 +847,9 @@ with col2:
         index=0,
         help="Azure OpenAI API version"
     )
+
+# Display current threshold setting
+st.info(f"Current Relevance Score Threshold: **{RELEVANCE_SCORE_THRESHOLD}** (Only chunks scoring above this threshold will be sent to LLM)")
 
 config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
 
@@ -794,13 +919,13 @@ Answer:"""
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("🎉 Documents processed with embedded links and ready for enhanced querying!")
+                        st.success("Documents processed with embedded links and ready for enhanced querying with 0.80 threshold!")
                     
                     except Exception as e:
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
-st.subheader("🔍 Ask Questions with Enhanced Retrieval")
+st.subheader("Ask Questions with Enhanced Retrieval (0.80 Threshold)")
 
 # Query input with example suggestions
 col1, col2 = st.columns([3, 1])
@@ -821,7 +946,7 @@ with col2:
     ]
     
     for example in example_queries:
-        if st.button(f"📝 {example}", key=f"example_{example}"):
+        if st.button(f"{example}", key=f"example_{example}"):
             query = example
             st.rerun()
 
@@ -832,19 +957,19 @@ with col1:
 with col2:
     retrieval_method = st.selectbox(
         "Retrieval Method:",
-        ["Enhanced (LLM Keywords)", "Standard"],
+        ["Enhanced (LLM Keywords + 0.80 Threshold)", "Standard"],
         index=0,
-        help="Choose between enhanced LLM-based keyword extraction or standard retrieval"
+        help="Choose between enhanced LLM-based keyword extraction with 0.80 threshold or standard retrieval"
     )
 
 # Query processing
-if st.button("🚀 Get Answer", disabled=not config_complete) and query:
+if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state.get('vector_db') and st.session_state.get('llm'):
-        if retrieval_method == "Enhanced (LLM Keywords)":
-            # Enhanced retrieval with LLM keyword extraction
-            with st.spinner("🤖 Processing query with enhanced retrieval..."):
+        if retrieval_method == "Enhanced (LLM Keywords + 0.80 Threshold)":
+            # Enhanced retrieval with LLM keyword extraction and 0.80 threshold
+            with st.spinner("Processing query with enhanced retrieval and 0.80 threshold..."):
                 try:
                     # Create enhanced retrieval chain
                     enhanced_chain = create_enhanced_retrieval_chain(
@@ -858,14 +983,14 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
                     response = enhanced_chain.invoke({"input": query})
                     
                     # Display response
-                    st.subheader("🎯 Enhanced Response:")
+                    st.subheader("Enhanced Response (0.80 Threshold):")
                     st.write(response['answer'])
                     
                     # Show retrieved chunks if enabled
                     if show_chunks and 'context' in response:
                         retrieved_docs = response['context']
                         if retrieved_docs:
-                            display_chunks(retrieved_docs, "📚 Documents Used for Enhanced Answer")
+                            display_chunks(retrieved_docs, "Documents Used for Enhanced Answer (0.80+ Score)")
                             
                             # Show source URLs
                             sources = set()
@@ -873,22 +998,22 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
                                 source = doc.metadata.get('source', 'Unknown')
                                 sources.add(source)
                             
-                            st.write("\n**📍 Information Sources:**")
+                            st.write("\n**Information Sources:**")
                             for i, source in enumerate(sources, 1):
                                 st.write(f"{i}. [{source}]({source})")
                     
-                    st.success("✅ Enhanced retrieval completed!")
+                    st.success("Enhanced retrieval with 0.80 threshold completed!")
                     
                 except Exception as e:
                     st.error(f"Enhanced processing failed: {e}")
                     # Fallback to original method
                     st.info("Falling back to standard retrieval...")
                     response = st.session_state['retrieval_chain'].invoke({"input": query})
-                    st.subheader("📄 Standard Response:")
+                    st.subheader("Standard Response:")
                     st.write(response['answer'])
         else:
             # Standard retrieval method
-            with st.spinner("🔍 Processing query with standard retrieval..."):
+            with st.spinner("Processing query with standard retrieval..."):
                 try:
                     if st.session_state.get('hf_embedding') is None:
                         st.info("Initializing embeddings...")
@@ -901,13 +1026,13 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
                     
                     response = st.session_state['retrieval_chain'].invoke({"input": query})
                     
-                    st.subheader("📄 Standard Response:")
+                    st.subheader("Standard Response:")
                     st.write(response['answer'])
                     
                     if show_chunks and 'context' in response:
                         retrieved_docs = response['context']
                         if retrieved_docs:
-                            display_chunks(retrieved_docs, "📋 Top Chunks Used for Answer Generation")
+                            display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
                             
                             links_used = 0
                             for doc in retrieved_docs:
@@ -917,12 +1042,12 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
                             if links_used > 0:
                                 st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links")
                             else:
-                                st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
+                                st.info("No chunks with source URLs and document links were retrieved for this query")
                         else:
                             st.info("No chunks were retrieved for this query.")
                     
                     if not is_fallback_response(response['answer']):
-                        st.write("\n**📍 Information Sources:**")
+                        st.write("\n**Information Sources:**")
                         sources = set()
                         retrieved_docs = response.get('context', [])
                         for doc in retrieved_docs:
@@ -932,7 +1057,7 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
                         for i, source in enumerate(sources, 1):
                             st.write(f"{i}. [{source}]({source})")
                     else:
-                        st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+                        st.info("No specific documents or sources are available for this query as it falls outside the current data scope.")
                 
                 except Exception as e:
                     st.error(f"Error generating response: {e}")
@@ -947,23 +1072,31 @@ if st.button("🚀 Get Answer", disabled=not config_complete) and query:
 
 # Sidebar with information
 with st.sidebar:
-    st.header("📋 About Enhanced Web GEN-ie")
+    st.header("About Enhanced Web GEN-ie")
     
-    st.markdown("""
-    ### 🚀 Key Features:
+    st.markdown(f"""
+    ### Key Features:
     - **LLM Keyword Extraction**: Intelligent query processing using GPT
+    - **0.80 Relevance Threshold**: Only high-quality chunks sent to LLM
     - **Enhanced Retrieval**: Multi-query search with weighted scoring
     - **Document Link Integration**: Embedded reference links in chunks
     - **Source Attribution**: Always includes source URLs
     - **Regulatory Focus**: Specialized for IRDAI, PMLA, FEMA content
     
-    ### 🔍 How Enhanced Retrieval Works:
-    1. **Query Analysis**: LLM extracts relevant keywords
-    2. **Multi-Query Search**: Original + keywords + combined queries
-    3. **Smart Ranking**: Weighted scoring based on relevance
-    4. **Context Enhancement**: Source URLs embedded in chunks
+    ### How 0.80 Threshold Works:
+    1. **Initial Retrieval**: Get candidate chunks from vector database
+    2. **Comprehensive Scoring**: Semantic similarity + keyword matching + domain relevance
+    3. **Quality Filtering**: Only chunks scoring ≥ 0.80 sent to LLM
+    4. **Enhanced Accuracy**: Higher precision, more relevant responses
     
-    ### 📊 Data Sources:
+    ### Current Settings:
+    - **Relevance Threshold**: {RELEVANCE_SCORE_THRESHOLD}
+    - **Semantic Weight**: 60%
+    - **Keyword Weight**: 20%
+    - **Domain Boost**: 12%
+    - **Quality Indicators**: 8%
+    
+    ### Data Sources:
     - IRDAI official website
     - Enforcement Directorate (FEMA)
     - Regulatory notifications & circulars
@@ -971,12 +1104,13 @@ with st.sidebar:
     """)
     
     if st.session_state.get('docs_loaded'):
-        st.success("✅ Documents loaded and ready!")
+        st.success("Documents loaded and ready!")
         st.metric("Total Documents", len(st.session_state.get('loaded_docs', [])))
         if st.session_state.get('vector_db'):
             st.metric("Vector Database", "Active")
+        st.metric("Relevance Threshold", f"{RELEVANCE_SCORE_THRESHOLD}")
     else:
-        st.warning("⏳ Please load documents first")
+        st.warning("Please load documents first")
     
     st.markdown("---")
-    st.markdown("*Made with ❤️ using Streamlit & LangChain*")
+    st.markdown("*Made with Streamlit & LangChain*")
