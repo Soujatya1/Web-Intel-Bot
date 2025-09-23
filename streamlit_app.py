@@ -62,7 +62,242 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
+# Query Enhancement Prompt Template
+QUERY_ENHANCEMENT_PROMPT = """
+You are an expert in Indian regulatory and insurance domain. Given a user question, extract the most relevant keywords and phrases that would help in document retrieval.
+
+Focus on:
+1. Regulatory terms (acts, circulars, guidelines, amendments, notifications)
+2. Domain-specific terms (insurance, IRDAI, UIDAI, PMLA, FEMA)
+3. Time-related keywords (recent, latest, new, updated, 2024, 2025)
+4. Specific regulatory concepts and entities
+5. Legal and compliance terminology
+
+User Question: {question}
+
+Extract 8-12 most relevant keywords/phrases for document retrieval. Return them as a comma-separated list.
+Focus on terms that would likely appear in regulatory documents.
+
+Keywords:"""
+
 RELEVANCE_SCORE_THRESHOLD = 0.3
+
+def extract_keywords_with_llm(query, llm):
+    """Extract keywords from query using LLM for better retrieval"""
+    try:
+        # Create keyword extraction prompt
+        keyword_prompt = ChatPromptTemplate.from_template(QUERY_ENHANCEMENT_PROMPT)
+        keyword_chain = keyword_prompt | llm
+        
+        # Get keywords from LLM
+        response = keyword_chain.invoke({"question": query})
+        
+        # Extract keywords from response
+        if hasattr(response, 'content'):
+            keywords_text = response.content.strip()
+        else:
+            keywords_text = str(response).strip()
+        
+        # Parse keywords
+        keywords = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
+        
+        # Limit to reasonable number
+        keywords = keywords[:12]
+        
+        return keywords, keywords_text
+        
+    except Exception as e:
+        st.warning(f"Keyword extraction failed: {e}. Using fallback method.")
+        # Fallback to simple keyword extraction
+        return extract_keywords_fallback(query), "Fallback method used"
+
+def extract_keywords_fallback(query):
+    """Fallback keyword extraction method"""
+    import re
+    
+    # Domain-specific terms to prioritize
+    domain_terms = [
+        'irdai', 'insurance', 'uidai', 'aadhaar', 'pmla', 'fema', 
+        'act', 'regulation', 'circular', 'guideline', 'amendment',
+        'notification', 'policy', 'compliance', 'recent', 'latest',
+        'new', 'updated', '2024', '2025'
+    ]
+    
+    # Extract words from query
+    words = re.findall(r'\b\w+\b', query.lower())
+    
+    # Prioritize domain terms
+    keywords = []
+    for term in domain_terms:
+        if term in query.lower():
+            keywords.append(term)
+    
+    # Add other significant words
+    for word in words:
+        if len(word) > 3 and word not in keywords:
+            keywords.append(word)
+    
+    return keywords[:10]
+
+def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=6):
+    """Enhanced retrieval using LLM-extracted keywords"""
+    try:
+        # Step 1: Extract keywords using LLM
+        st.info("🔍 Extracting keywords using LLM...")
+        keywords, keywords_text = extract_keywords_with_llm(query, llm)
+        
+        # Display extracted keywords
+        with st.expander("📋 Extracted Keywords for Retrieval"):
+            st.write("**Keywords extracted by LLM:**")
+            st.code(keywords_text)
+            st.write("**Processed keywords list:**")
+            st.write(", ".join(f"`{kw}`" for kw in keywords))
+        
+        # Step 2: Create enhanced search queries
+        enhanced_queries = []
+        
+        # Original query
+        enhanced_queries.append(query)
+        
+        # Keywords-only query
+        keywords_query = " ".join(keywords)
+        enhanced_queries.append(keywords_query)
+        
+        # Combined query with weights
+        combined_query = f"{query} {' '.join(keywords[:6])}"
+        enhanced_queries.append(combined_query)
+        
+        # Step 3: Retrieve documents for each query
+        all_retrieved_docs = []
+        doc_scores = {}
+        
+        st.info("🔎 Performing enhanced retrieval...")
+        
+        for i, search_query in enumerate(enhanced_queries):
+            try:
+                # Retrieve documents
+                docs = vector_db.similarity_search_with_score(search_query, k=k*2)
+                
+                # Weight documents based on query type
+                query_weight = [1.0, 0.8, 0.9][i]  # Original, keywords-only, combined
+                
+                for doc, score in docs:
+                    doc_id = (doc.page_content[:100], doc.metadata.get('source', ''))
+                    
+                    if doc_id not in doc_scores:
+                        doc_scores[doc_id] = {'doc': doc, 'max_score': 0, 'query_matches': []}
+                    
+                    weighted_score = (1 / (score + 1e-6)) * query_weight  # Convert distance to similarity
+                    doc_scores[doc_id]['max_score'] = max(doc_scores[doc_id]['max_score'], weighted_score)
+                    doc_scores[doc_id]['query_matches'].append(f"Query {i+1}: {weighted_score:.3f}")
+                    
+            except Exception as e:
+                st.warning(f"Retrieval failed for query {i+1}: {e}")
+                continue
+        
+        # Step 4: Re-rank and select top documents
+        if doc_scores:
+            # Sort by combined score
+            ranked_docs = sorted(
+                doc_scores.values(), 
+                key=lambda x: x['max_score'], 
+                reverse=True
+            )
+            
+            # Apply additional keyword-based filtering
+            final_docs = []
+            for doc_info in ranked_docs[:k*2]:
+                doc = doc_info['doc']
+                
+                # Calculate keyword overlap score
+                doc_text_lower = doc.page_content.lower()
+                keyword_matches = sum(1 for kw in keywords if kw.lower() in doc_text_lower)
+                keyword_score = keyword_matches / len(keywords) if keywords else 0
+                
+                # Combine with retrieval score
+                final_score = doc_info['max_score'] * (1 + keyword_score * 0.5)
+                
+                final_docs.append({
+                    'doc': doc,
+                    'final_score': final_score,
+                    'keyword_matches': keyword_matches,
+                    'query_matches': doc_info['query_matches']
+                })
+            
+            # Final ranking
+            final_docs.sort(key=lambda x: x['final_score'], reverse=True)
+            
+            # Return top k documents
+            selected_docs = [doc_info['doc'] for doc_info in final_docs[:k]]
+            
+            # Display retrieval stats
+            with st.expander("📊 Enhanced Retrieval Statistics"):
+                st.write(f"**Total unique documents found:** {len(doc_scores)}")
+                st.write(f"**Final selected documents:** {len(selected_docs)}")
+                
+                st.write("**Top 3 selected documents:**")
+                for i, doc_info in enumerate(final_docs[:3]):
+                    st.write(f"**Document {i+1}:**")
+                    st.write(f"- Source: {doc_info['doc'].metadata.get('source', 'Unknown')}")
+                    st.write(f"- Final Score: {doc_info['final_score']:.3f}")
+                    st.write(f"- Keyword Matches: {doc_info['keyword_matches']}/{len(keywords)}")
+                    st.write(f"- Query Match Details: {', '.join(doc_info['query_matches'])}")
+            
+            return selected_docs
+            
+        else:
+            st.warning("No documents retrieved. Falling back to simple retrieval.")
+            return vector_db.similarity_search(query, k=k)
+            
+    except Exception as e:
+        st.error(f"Enhanced retrieval failed: {e}")
+        st.warning("Falling back to simple retrieval method.")
+        return vector_db.similarity_search(query, k=k)
+
+def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
+    """Create a retrieval chain with enhanced keyword-based retrieval"""
+    
+    class EnhancedRetriever:
+        def __init__(self, vector_db, hf_embedding, llm, k=6):
+            self.vector_db = vector_db
+            self.hf_embedding = hf_embedding
+            self.llm = llm
+            self.k = k
+        
+        def get_relevant_documents(self, query):
+            return enhanced_retrieval_with_keywords(
+                query, self.vector_db, self.hf_embedding, self.llm, self.k
+            )
+        
+        def invoke(self, input_dict):
+            query = input_dict.get("input", input_dict.get("query", ""))
+            return self.get_relevant_documents(query)
+    
+    # Create enhanced retriever
+    enhanced_retriever = EnhancedRetriever(vector_db, hf_embedding, llm)
+    
+    # Create document chain
+    document_chain = create_stuff_documents_chain(llm, prompt)
+    
+    # Create custom retrieval chain
+    class EnhancedRetrievalChain:
+        def __init__(self, retriever, document_chain):
+            self.retriever = retriever
+            self.document_chain = document_chain
+        
+        def invoke(self, input_dict):
+            # Get query
+            query = input_dict["input"]
+            
+            # Retrieve documents
+            docs = self.retriever.get_relevant_documents(query)
+            
+            # Generate answer
+            result = self.document_chain.invoke({"input": query, "context": docs})
+            
+            return {"answer": result, "context": docs}
+    
+    return EnhancedRetrievalChain(enhanced_retriever, document_chain)
 
 def relevance_score(query, document, embeddings):
     try:
@@ -79,64 +314,6 @@ def relevance_score(query, document, embeddings):
         keywords = query.lower().split()
         keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
         return keyword_matches * 0.2
-
-def re_rank_documents(query, documents, embeddings):
-    if not documents:
-        return []
-    
-    if embeddings is None:
-        st.warning("Embeddings not available, using original document order")
-        return documents
-        
-    try:
-        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
-        
-        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
-        
-        if not scored_docs:
-            st.warning("No documents passed relevance threshold, using original documents")
-            return documents[:6]
-        
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        top_doc_source = scored_docs[0][0].metadata.get("source", "")
-        
-        source_groups = {}
-        for doc, score in scored_docs:
-            source = doc.metadata.get("source", "")
-            if source not in source_groups:
-                source_groups[source] = []
-            source_groups[source].append((doc, score))
-        
-        final_ranked_docs = []
-        if top_doc_source in source_groups:
-            top_source_docs = sorted(
-                source_groups[top_doc_source], 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in top_source_docs])
-            del source_groups[top_doc_source]
-        
-        other_sources = []
-        for source, docs in source_groups.items():
-            avg_source_score = sum(score for _, score in docs) / len(docs)
-            other_sources.append((source, avg_source_score, docs))
-        
-        other_sources.sort(key=lambda x: x[1], reverse=True)
-        
-        for source, avg_score, docs in other_sources:
-            sorted_docs = sorted(
-                docs, 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in sorted_docs])
-        
-        return final_ranked_docs
-        
-    except Exception as e:
-        st.error(f"Error in re-ranking documents: {e}")
-        st.warning("Falling back to original document order")
-        return documents
 
 def enhanced_web_scrape(url):
     try:
@@ -434,40 +611,6 @@ def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
                 st.write(f"**Chunk Length:** {len(content)} characters")
                 st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
 
-def enhance_chunks_with_links(chunks):
-    """Add source URL and document links to the first line of each chunk"""
-    enhanced_chunks = []
-    
-    for chunk in chunks:
-        source_url = chunk.metadata.get('source', 'Unknown')
-        document_links = chunk.metadata.get('document_links', [])
-        
-        # Create source line
-        source_line = f"Source URL: {source_url}"
-        
-        # Add document links if available
-        if document_links:
-            links_text = " | Document Links: "
-            link_titles = []
-            for link in document_links[:3]:  # Limit to first 3 links to avoid too long first line
-                link_titles.append(f"{link['title']} ({link['link']})")
-            links_text += "; ".join(link_titles)
-            if len(document_links) > 3:
-                links_text += f" and {len(document_links) - 3} more..."
-            source_line += links_text
-        
-        # Add source line to the beginning of chunk content
-        enhanced_content = source_line + "\n\n" + chunk.page_content
-        
-        # Create new chunk with enhanced content
-        enhanced_chunk = Document(
-            page_content=enhanced_content,
-            metadata=chunk.metadata
-        )
-        enhanced_chunks.append(enhanced_chunk)
-    
-    return enhanced_chunks
-
 def enhance_documents_before_chunking(documents):
     """Add source URL and document links to each document before chunking"""
     enhanced_documents = []
@@ -502,64 +645,7 @@ def enhance_documents_before_chunking(documents):
     
     return enhanced_documents
 
-def re_rank_documents(query, documents, embeddings):
-    if not documents:
-        return []
-    
-    if embeddings is None:
-        st.warning("Embeddings not available, using original document order")
-        return documents
-        
-    try:
-        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
-        
-        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
-        
-        if not scored_docs:
-            st.warning("No documents passed relevance threshold, using original documents")
-            return documents[:6]
-        
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        top_doc_source = scored_docs[0][0].metadata.get("source", "")
-        
-        source_groups = {}
-        for doc, score in scored_docs:
-            source = doc.metadata.get("source", "")
-            if source not in source_groups:
-                source_groups[source] = []
-            source_groups[source].append((doc, score))
-        
-        final_ranked_docs = []
-        if top_doc_source in source_groups:
-            top_source_docs = sorted(
-                source_groups[top_doc_source], 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in top_source_docs])
-            del source_groups[top_doc_source]
-        
-        other_sources = []
-        for source, docs in source_groups.items():
-            avg_source_score = sum(score for _, score in docs) / len(docs)
-            other_sources.append((source, avg_source_score, docs))
-        
-        other_sources.sort(key=lambda x: x[1], reverse=True)
-        
-        for source, avg_score, docs in other_sources:
-            sorted_docs = sorted(
-                docs, 
-                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
-            )
-            final_ranked_docs.extend([doc for doc, score in sorted_docs])
-        
-        return final_ranked_docs
-        
-    except Exception as e:
-        st.error(f"Error in re-ranking documents: {e}")
-        st.warning("Falling back to original document order")
-        return documents
-
+# Initialize session state
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -575,7 +661,8 @@ if 'hf_embedding' not in st.session_state:
 if 'prompt' not in st.session_state:
     st.session_state['prompt'] = None
 
-st.title("Web GEN-ie")
+st.title("🤖 Enhanced Web GEN-ie with LLM Keyword Extraction")
+st.markdown("*Powered by intelligent keyword extraction and enhanced document retrieval*")
 
 st.subheader("Azure OpenAI Configuration")
 
@@ -655,11 +742,10 @@ Answer:"""
                             st.warning("Using fallback prompt template")
                         
                         text_splitter = SemanticChunker(
-                       embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
-                       breakpoint_threshold_type="percentile",
-                      breakpoint_threshold_amount=95,
-                      min_chunk_size=400
-                       
+                            embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
+                            breakpoint_threshold_type="percentile",
+                            breakpoint_threshold_amount=95,
+                            min_chunk_size=400
                         )
                         
                         enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
@@ -678,74 +764,189 @@ Answer:"""
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("Documents processed with embedded links and ready for querying!")
+                        st.success("🎉 Documents processed with embedded links and ready for enhanced querying!")
                     
                     except Exception as e:
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
-st.subheader("Ask Questions")
-query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
+st.subheader("🔍 Ask Questions with Enhanced Retrieval")
 
-show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
+# Query input with example suggestions
+col1, col2 = st.columns([3, 1])
+with col1:
+    query = st.text_input(
+        "Enter your query:", 
+        value="What are the recent Insurance Acts and amendments?",
+        help="Ask questions about IRDAI regulations, insurance acts, PMLA, FEMA, or related topics"
+    )
 
-if st.button("Get Answer", disabled=not config_complete) and query:
+with col2:
+    st.markdown("**Example queries:**")
+    example_queries = [
+        "Latest IRDAI guidelines",
+        "Recent insurance amendments",
+        "New PMLA regulations",
+        "FEMA compliance updates"
+    ]
+    
+    for example in example_queries:
+        if st.button(f"📝 {example}", key=f"example_{example}"):
+            query = example
+            st.rerun()
+
+# Options
+col1, col2 = st.columns(2)
+with col1:
+    show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
+with col2:
+    retrieval_method = st.selectbox(
+        "Retrieval Method:",
+        ["Enhanced (LLM Keywords)", "Standard"],
+        index=0,
+        help="Choose between enhanced LLM-based keyword extraction or standard retrieval"
+    )
+
+# Query processing
+if st.button("🚀 Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state.get('vector_db') and st.session_state.get('llm'):
-        with st.spinner("Searching and generating answer..."):
-            try:
-                if st.session_state.get('hf_embedding') is None:
-                    st.info("Initializing embeddings...")
-                    st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
-                
-                if st.session_state.get('prompt') is None:
-                    st.info("Creating prompt template...")
-                    prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                    st.session_state['prompt'] = prompt
-                
-                response = st.session_state['retrieval_chain'].invoke({"input": query})
-                
-                st.subheader("Response:")
-                st.write(response['answer'])
-                
-                if show_chunks and 'context' in response:
-                    retrieved_docs = response['context']
-                    if retrieved_docs:
-                        display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
-                        
-                        links_used = 0
-                        for doc in retrieved_docs:
-                            if "Source URL:" in doc.page_content:
-                                links_used += 1
-                        
-                        if links_used > 0:
-                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links that were sent to the LLM")
-                        else:
-                            st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
-                    else:
-                        st.info("No chunks were retrieved for this query.")
-                
-                if not is_fallback_response(response['answer']):
-                    st.write("\n**📍 Information Sources:**")
-                    sources = set()
-                    retrieved_docs = response.get('context', [])
-                    for doc in retrieved_docs:
-                        source = doc.metadata.get('source', 'Unknown')
-                        sources.add(source)
+        if retrieval_method == "Enhanced (LLM Keywords)":
+            # Enhanced retrieval with LLM keyword extraction
+            with st.spinner("🤖 Processing query with enhanced retrieval..."):
+                try:
+                    # Create enhanced retrieval chain
+                    enhanced_chain = create_enhanced_retrieval_chain(
+                        st.session_state['llm'],
+                        st.session_state['vector_db'],
+                        st.session_state['hf_embedding'],
+                        st.session_state['prompt']
+                    )
                     
-                    for i, source in enumerate(sources, 1):
-                        st.write(f"{i}. [{source}]({source})")
-                else:
-                    st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
-            
-            except Exception as e:
-                st.error(f"Error generating response: {e}")
-                st.error("Please check your Azure OpenAI configuration and try again.")
-                st.error("Debug Info:")
-                st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
-                st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
-                st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
-                st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
+                    # Process query
+                    response = enhanced_chain.invoke({"input": query})
+                    
+                    # Display response
+                    st.subheader("🎯 Enhanced Response:")
+                    st.write(response['answer'])
+                    
+                    # Show retrieved chunks if enabled
+                    if show_chunks and 'context' in response:
+                        retrieved_docs = response['context']
+                        if retrieved_docs:
+                            display_chunks(retrieved_docs, "📚 Documents Used for Enhanced Answer")
+                            
+                            # Show source URLs
+                            sources = set()
+                            for doc in retrieved_docs:
+                                source = doc.metadata.get('source', 'Unknown')
+                                sources.add(source)
+                            
+                            st.write("\n**📍 Information Sources:**")
+                            for i, source in enumerate(sources, 1):
+                                st.write(f"{i}. [{source}]({source})")
+                    
+                    st.success("✅ Enhanced retrieval completed!")
+                    
+                except Exception as e:
+                    st.error(f"Enhanced processing failed: {e}")
+                    # Fallback to original method
+                    st.info("Falling back to standard retrieval...")
+                    response = st.session_state['retrieval_chain'].invoke({"input": query})
+                    st.subheader("📄 Standard Response:")
+                    st.write(response['answer'])
+        else:
+            # Standard retrieval method
+            with st.spinner("🔍 Processing query with standard retrieval..."):
+                try:
+                    if st.session_state.get('hf_embedding') is None:
+                        st.info("Initializing embeddings...")
+                        st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                    
+                    if st.session_state.get('prompt') is None:
+                        st.info("Creating prompt template...")
+                        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                        st.session_state['prompt'] = prompt
+                    
+                    response = st.session_state['retrieval_chain'].invoke({"input": query})
+                    
+                    st.subheader("📄 Standard Response:")
+                    st.write(response['answer'])
+                    
+                    if show_chunks and 'context' in response:
+                        retrieved_docs = response['context']
+                        if retrieved_docs:
+                            display_chunks(retrieved_docs, "📋 Top Chunks Used for Answer Generation")
+                            
+                            links_used = 0
+                            for doc in retrieved_docs:
+                                if "Source URL:" in doc.page_content:
+                                    links_used += 1
+                            
+                            if links_used > 0:
+                                st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links")
+                            else:
+                                st.info("ℹ️ No chunks with source URLs and document links were retrieved for this query")
+                        else:
+                            st.info("No chunks were retrieved for this query.")
+                    
+                    if not is_fallback_response(response['answer']):
+                        st.write("\n**📍 Information Sources:**")
+                        sources = set()
+                        retrieved_docs = response.get('context', [])
+                        for doc in retrieved_docs:
+                            source = doc.metadata.get('source', 'Unknown')
+                            sources.add(source)
+                        
+                        for i, source in enumerate(sources, 1):
+                            st.write(f"{i}. [{source}]({source})")
+                    else:
+                        st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+                
+                except Exception as e:
+                    st.error(f"Error generating response: {e}")
+                    st.error("Please check your Azure OpenAI configuration and try again.")
+                    st.error("Debug Info:")
+                    st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
+                    st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
+                    st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
+                    st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
+
+# Sidebar with information
+with st.sidebar:
+    st.header("📋 About Enhanced Web GEN-ie")
+    
+    st.markdown("""
+    ### 🚀 Key Features:
+    - **LLM Keyword Extraction**: Intelligent query processing using GPT
+    - **Enhanced Retrieval**: Multi-query search with weighted scoring
+    - **Document Link Integration**: Embedded reference links in chunks
+    - **Source Attribution**: Always includes source URLs
+    - **Regulatory Focus**: Specialized for IRDAI, PMLA, FEMA content
+    
+    ### 🔍 How Enhanced Retrieval Works:
+    1. **Query Analysis**: LLM extracts relevant keywords
+    2. **Multi-Query Search**: Original + keywords + combined queries
+    3. **Smart Ranking**: Weighted scoring based on relevance
+    4. **Context Enhancement**: Source URLs embedded in chunks
+    
+    ### 📊 Data Sources:
+    - IRDAI official website
+    - Enforcement Directorate (FEMA)
+    - Regulatory notifications & circulars
+    - Policy guidelines & amendments
+    """)
+    
+    if st.session_state.get('docs_loaded'):
+        st.success("✅ Documents loaded and ready!")
+        st.metric("Total Documents", len(st.session_state.get('loaded_docs', [])))
+        if st.session_state.get('vector_db'):
+            st.metric("Vector Database", "Active")
+    else:
+        st.warning("⏳ Please load documents first")
+    
+    st.markdown("---")
+    st.markdown("*Made with ❤️ using Streamlit & LangChain*")
