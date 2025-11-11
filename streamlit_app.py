@@ -929,7 +929,7 @@ Answer:"""
                         
                         text_splitter = SemanticChunker(
                        embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
-                       breakpoint_threshold_type="percentile",
+                      breakpoint_threshold_type="percentile",
                       breakpoint_threshold_amount=95,
                       min_chunk_size=400
                        
@@ -947,10 +947,10 @@ Answer:"""
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
-						# Create response using document chain
-prompt = st.session_state['prompt']
 
-doc_chain = (
+						prompt = st.session_state['prompt']
+
+						doc_chain = (
     {
         "context": lambda _: "\n\n".join(d.page_content for d in final_docs),
         "input": RunnablePassthrough()
@@ -960,9 +960,8 @@ doc_chain = (
     | StrOutputParser()
 )
 
-response_text = doc_chain.invoke(query)
-response = {"answer": response_text, "context": final_docs}
-
+						response_text = doc_chain.invoke(query)
+						response = {"answer": response_text, "context": final_docs}
 						
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
