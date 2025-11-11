@@ -947,8 +947,9 @@ Answer:"""
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
-                        prompt = st.session_state['prompt']
-
+                        # Create retrieval-augmented generation pipeline using LCEL
+						prompt = st.session_state['prompt']
+						
 						# Runnable chain: retrieves docs → formats prompt → sends to LLM → returns string
 						retrieval_chain = (
 						    {
@@ -961,6 +962,7 @@ Answer:"""
 						)
 						
 						st.session_state['retrieval_chain'] = retrieval_chain
+
                         
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
