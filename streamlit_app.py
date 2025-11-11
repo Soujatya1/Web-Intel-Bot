@@ -4,19 +4,19 @@ from langchain_openai import AzureChatOpenAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.combine_documents.base import create_stuff_documents_chain
-from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.documents import Document
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 import requests
 from bs4 import BeautifulSoup
 import time
 import re
 from datetime import datetime
-
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
+from operator import itemgetter
 
 HARDCODED_WEBSITES = [
                       "https://irdai.gov.in/acts",
@@ -947,8 +947,20 @@ Answer:"""
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
                         retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
-                        document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
-                        st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
+                        prompt = st.session_state['prompt']
+
+						# Runnable chain: retrieves docs → formats prompt → sends to LLM → returns string
+						retrieval_chain = (
+						    {
+						        "context": retriever | (lambda docs: "\n\n".join(d.page_content for d in docs)),
+						        "input": RunnablePassthrough()
+						    }
+						    | prompt
+						    | st.session_state['llm']
+						    | StrOutputParser()
+						)
+						
+						st.session_state['retrieval_chain'] = retrieval_chain
                         
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
@@ -1016,11 +1028,20 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 final_docs = reranked_docs[:6]
                 
                 # Create response using document chain
-                document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
-                response = document_chain.invoke({"input": query, "context": final_docs})
-                
-                # Format response to match expected structure
-                response = {"answer": response, "context": final_docs}
+                prompt = st.session_state['prompt']
+
+				doc_chain = (
+				    {
+				        "context": lambda _: "\n\n".join(d.page_content for d in final_docs),
+				        "input": RunnablePassthrough()
+				    }
+				    | prompt
+				    | st.session_state['llm']
+				    | StrOutputParser()
+				)
+				
+				response_text = doc_chain.invoke(query)
+				response = {"answer": response_text, "context": final_docs}
                 
                 st.subheader("Response:")
                 st.write(response['answer'])
