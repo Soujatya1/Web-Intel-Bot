@@ -946,22 +946,24 @@ Answer:"""
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
+						retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
 
+						# Create retrieval-augmented generation pipeline using LCEL
 						prompt = st.session_state['prompt']
+						
+						# Runnable chain: retrieves docs → formats prompt → sends to LLM → returns string
+						retrieval_chain = (
+						    {
+						        "context": retriever | (lambda docs: "\n\n".join(d.page_content for d in docs)),
+						        "input": RunnablePassthrough()
+						    }
+						    | prompt
+						    | st.session_state['llm']
+						    | StrOutputParser()
+						)
+						
+						st.session_state['retrieval_chain'] = retrieval_chain
 
-						doc_chain = (
-    {
-        "context": lambda _: "\n\n".join(d.page_content for d in final_docs),
-        "input": RunnablePassthrough()
-    }
-    | prompt
-    | st.session_state['llm']
-    | StrOutputParser()
-)
-
-						response_text = doc_chain.invoke(query)
-						response = {"answer": response_text, "context": final_docs}
 						
                         st.session_state['docs_loaded'] = True
                         st.success("Documents processed with embedded links and ready for querying!")
@@ -1029,7 +1031,6 @@ if st.button("Get Answer", disabled=not config_complete) and query:
                 final_docs = reranked_docs[:6]
                 
                 # Create response using document chain
-                # Create response using document chain
 				prompt = st.session_state['prompt']
 				
 				doc_chain = (
@@ -1044,6 +1045,7 @@ if st.button("Get Answer", disabled=not config_complete) and query:
 				
 				response_text = doc_chain.invoke(query)
 				response = {"answer": response_text, "context": final_docs}
+
 
                 
                 st.subheader("Response:")
