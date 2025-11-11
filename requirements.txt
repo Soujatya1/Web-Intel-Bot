@@ -18,3 +18,4 @@ numpy
 unstructured
 langchain-openai
 langchain-experimental
+langchain
