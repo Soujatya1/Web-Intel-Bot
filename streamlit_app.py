@@ -11,32 +11,26 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import re
+from datetime import datetime
+
 from urllib.parse import urljoin, urlparse
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_experimental.text_splitter import SemanticChunker
-import numpy as np
 
-HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
-                      "https://irdai.gov.in/home",
+HARDCODED_WEBSITES = [
+                      "https://irdai.gov.in/acts",
                       "https://irdai.gov.in/rules",
-                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
-                      "https://irdai.gov.in/updated-regulations",
-                      "https://irdai.gov.in/notifications",
-                      "https://irdai.gov.in/circulars",
-                      "https://irdai.gov.in/guidelines",
-                      "https://irdai.gov.in/orders1",
                       "https://irdai.gov.in/notices1",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/notifications",
+                      "https://irdai.gov.in/consolidated-gazette-notified-regulations",
+                      "https://irdai.gov.in/circulars",
+                      
+                      "https://irdai.gov.in/orders1",
                       "https://irdai.gov.in/exposure-drafts",
                       "https://irdai.gov.in/programmes-to-advance-understanding-of-rti",
-                      "https://irdai.gov.in/information-under-section-4-1-b-of-rti-act-2005",
-                      "https://irdai.gov.in/information-under-section-4-1-d-of-rti-act-2005",
-                      "https://irdai.gov.in/rti-act",
                       "https://irdai.gov.in/cic-orders",
-                      "https://irdai.gov.in/rules2",
-                      "https://irdai.gov.in/rti-2005/tenders",
-                      "https://irdai.gov.in/web/guest/faqs1",
-                      "https://irdai.gov.in/other-communication",
                       "https://irdai.gov.in/antimoney-laundering",
                       "https://irdai.gov.in/other-communication",
                       "https://irdai.gov.in/directory-of-employees",
@@ -58,9 +52,8 @@ HARDCODED_WEBSITES = ["https://irdai.gov.in/acts",
                       "https://enforcementdirectorate.gov.in/fema?page=3",
                       "https://enforcementdirectorate.gov.in/bns",
                       "https://enforcementdirectorate.gov.in/bnss",
-                      "https://enforcementdirectorate.gov.in/bsa",
-                      "https://egazette.gov.in/(S(3di4ni0mu42l0jp35brfok2j))/default.aspx"
-                      ]
+                      "https://enforcementdirectorate.gov.in/bsa"
+]
 
 SYSTEM_PROMPT_TEMPLATE = """
 You are a website expert assistant specializing in understanding and answering questions from IRDAI, UIDAI, PMLA and egazette websites.
@@ -72,7 +65,7 @@ IMPORTANT INSTRUCTIONS:
 - Always reference the source URL provided at the beginning of each chunk in your answers
 - Answer questions using the provided context from the websites
 - Pay special attention to dates, recent updates, and chronological information
-- Always Give response in chronological order according to date.
+- Always Give response in chronological order according to date.if from multiple different sources links then try to use latest  documents linksfrom different source link.
 - When asked about "what's new" or recent developments, focus on the most recent information available
 - Look for press releases, circulars, guidelines, and policy updates
 - Provide specific details about new regulations, policy changes, or announcements
@@ -81,8 +74,9 @@ IMPORTANT INSTRUCTIONS:
 - When mentioning any acts, circulars, or regulations, try to reference the available document links that are provided in the context
 - If you find any PII data in the question (e.g., PAN card no., AADHAAR no., DOB, Address), respond with: "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on, as your query contains PII data"
 - Use the document links provided in the context to give more comprehensive answers with proper references
-- Always include the source URL in your answer for credibility and reference
-
+- Always include the source URL in your answer for credibility and reference.
+- If any general question is asked like latest updates on legal notices ,then instead of only giving source link also latest document links chronlogically from legals.The document links can be of any category like acts , notices,circulars many more.
+-**CRITICAL**: Never miss to give Document link and source link in your answer.
 FALLBACK RESPONSE (use ONLY when context is completely irrelevant):
 "Thank you for your question. The details you've asked for fall outside the scope of the data I've been trained on. However, I've gathered information that closely aligns with your query and may address your needs. Please review the provided details below to ensure they align with your expectations."
 
@@ -93,379 +87,264 @@ Question: {input}
 Provide a comprehensive answer using the available context, including relevant document links and source URLs when available. Be helpful and informative even if the context only partially addresses the question.
 """
 
-QUERY_ENHANCEMENT_PROMPT = """
-You are a precise keyword extractor for document retrieval. Your job is to extract ONLY the most essential keywords that are directly related to what the user is asking for.
+RELEVANCE_SCORE_THRESHOLD = 0.3
 
-STRICT RULES:
-1. DO NOT add domain context unless explicitly mentioned in the query
-2. DO NOT add synonyms or related terms unless they are essential
-3. FOCUS on the exact words and concepts the user mentioned
-4. If user asks about "recent X", include both "recent" and "X"
-5. If user asks about specific document types (gazette, circular, etc.), keep those exact terms
-6. Extract the core nouns, adjectives, and specific identifiers from the query
-7. Limit to 4-6 keywords maximum
+def filter_urls_by_query(query, urls):
+    """Filter URLs based on query relevance to reduce noise"""
+    query_lower = query.lower()
+    
+    # Query-specific URL mapping with priority order
+    url_keywords = {
+       "acts": [
+        "irdai.gov.in/acts",
+        "uidai.gov.in/en/about-uidai/legal-framework"
+    ],
+    "rules": [
+        "https://irdai.gov.in/rules",
+      
 
-User Query: "{question}"
+    ],
+    "regulations": [
+       
+        "uidai.gov.in/en/about-uidai/legal-framework/regulations",
+        "uidai.gov.in/en/about-uidai/legal-framework/updated-regulation"
+    ],
+    "notifications": [
+        "irdai.gov.in/notifications",
+        "uidai.gov.in/en/about-uidai/legal-framework/notifications"
+    ],
+    "circulars": [
+        "irdai.gov.in/circulars",
+        "uidai.gov.in/en/about-uidai/legal-framework/circulars"
+    ],
+    "guidelines": [
+        "irdai.gov.in/guidelines"
+    ],
+    "orders": [
+        "irdai.gov.in/orders1",
+        "irdai.gov.in/cic-orders"
+    ],
+    "exposure_drafts": [
+        "irdai.gov.in/exposure-drafts"
+    ],
+    "penalties": [
+        "irdai.gov.in/warnings-and-penalties"
+    ],
+    "anti_money_laundering": [
+        "irdai.gov.in/antimoney-laundering"
+    ],
+    "other_communications": [
+        "irdai.gov.in/other-communication"
+    ],
+    "directory": [
+        "irdai.gov.in/directory-of-employees"
+    ],
+    "programmes_rti": [
+        "irdai.gov.in/programmes-to-advance-understanding-of-rti"
+    ],
+    "judgements": [
+        "uidai.gov.in/en/about-uidai/legal-framework/judgements"
+    ],
+    "enforcement_pmla": [
+        "enforcementdirectorate.gov.in/pmla",
+		"https://enforcementdirectorate.gov.in/pmla?page=1"
+    ],
+    "enforcement_fema": [
+        "enforcementdirectorate.gov.in/fema",
+	    "https://enforcementdirectorate.gov.in/fema?page=1",
+        "https://enforcementdirectorate.gov.in/fema?page=2",
+        "https://enforcementdirectorate.gov.in/fema?page=3"
+    ],
+    "enforcement_bns": [
+        "enforcementdirectorate.gov.in/bns",
+        "enforcementdirectorate.gov.in/bnss"
+    ],
+    "enforcement_bsa": [
+        "enforcementdirectorate.gov.in/bsa"
+    ],
+    "gazettes": [
+        "https://egazette.gov.in/(S(ylhvpcedcc5ooe3drkj1way2))/default.aspx"
+    ],
+    
+    "uidai": ["uidai.gov.in"],
+    "aadhaar": ["uidai.gov.in"],
+    "enforcement": ["enforcementdirectorate.gov.in"],
+    "legal":["irdai.gov.in/acts","uidai.gov.in/en/about-uidai/legal-framework","https://irdai.gov.in/notices1","https://irdai.gov.in/consolidated-gazette-notified-regulations","https://irdai.gov.in/notifications","https://irdai.gov.in/circulars","https://irdai.gov.in/orders1","https://irdai.gov.in/exposure-drafts","https://irdai.gov.in/programmes-to-advance-understanding-of-rti","https://irdai.gov.in/antimoney-laundering","https://irdai.gov.in/other-communication",'irdai.gov.in/guidelines'],
 
-Extract ONLY the most directly relevant keywords from this query. Do not expand with domain knowledge.
-
-Keywords (comma-separated, max 6):"""
-
-# Changed threshold to 0.80
-RELEVANCE_SCORE_THRESHOLD = 0.80
-
-def calculate_comprehensive_relevance_score(query, document, embeddings):
-    """
-    Calculate a comprehensive relevance score combining semantic similarity,
-    keyword matching, and domain-specific factors
-    """
-    try:
-        # 1. Semantic similarity using embeddings (primary factor)
-        query_embedding = embeddings.embed_query(query)
-        document_embedding = embeddings.embed_documents([document.page_content])[0]
-        semantic_similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
-        
-        # 2. Keyword matching score
-        query_words = set(query.lower().split())
-        doc_words = set(document.page_content.lower().split())
-        
-        # Exact keyword matches
-        exact_matches = len(query_words.intersection(doc_words))
-        keyword_score = exact_matches / len(query_words) if query_words else 0
-        
-        # 3. Domain-specific keyword boost
-        domain_keywords = {
-            'irdai': 0.2, 'insurance': 0.15, 'act': 0.12, 'regulation': 0.12,
-            'circular': 0.1, 'amendment': 0.1, 'guideline': 0.1,
-            'pmla': 0.2, 'fema': 0.2, 'uidai': 0.2, 'aadhaar': 0.15,
-            'notification': 0.08, 'policy': 0.08, 'compliance': 0.08,
-            'recent': 0.06, 'latest': 0.06, 'new': 0.06, 'updated': 0.06
-        }
-        
-        domain_boost = 0
-        doc_lower = document.page_content.lower()
-        query_lower = query.lower()
-        
-        for keyword, weight in domain_keywords.items():
-            if keyword in query_lower and keyword in doc_lower:
-                domain_boost += weight
-        
-        # 4. Document quality indicators
-        quality_boost = 0
-        
-        # Has source URL
-        if "Source URL:" in document.page_content:
-            quality_boost += 0.08
-        
-        # Has document links
-        if "=== RELEVANT DOCUMENT LINKS ===" in document.page_content:
-            quality_boost += 0.08
-        
-        # Content length (optimal range bonus)
-        content_length = len(document.page_content)
-        if 500 <= content_length <= 3000:  # Optimal chunk size
-            quality_boost += 0.05
-        
-        # 5. Recency indicators (if available)
-        recency_boost = 0
-        recency_terms = ['2024', '2025', 'recent', 'latest', 'updated', 'new']
-        for term in recency_terms:
-            if term in query_lower and term in doc_lower:
-                recency_boost += 0.04
-        
-        # Combine all scores with adjusted weights to reach higher scores
-        final_score = (
-            semantic_similarity * 0.60 +  # Increased weight on semantic similarity
-            keyword_score * 0.20 +        # Keyword matching
-            domain_boost * 0.12 +         # Domain relevance
-            quality_boost * 0.05 +        # Document quality
-            recency_boost * 0.03          # Recency indicators
-        )
-        
-        # Apply a boost for high-quality matches
-        if semantic_similarity > 0.7 and keyword_score > 0.5:
-            final_score = min(final_score * 1.1, 1.0)
-        
-        # Normalize to ensure score doesn't exceed 1.0
-        final_score = min(final_score, 1.0)
-        
-        return final_score
-        
-    except Exception as e:
-        st.warning(f"Error calculating relevance score: {e}")
-        # Fallback to keyword-based scoring
-        query_words = set(query.lower().split())
-        doc_words = set(document.page_content.lower().split())
-        exact_matches = len(query_words.intersection(doc_words))
-        return (exact_matches / len(query_words)) * 0.6 if query_words else 0.0
-
-def filter_chunks_by_relevance(query, chunks, embeddings, threshold=RELEVANCE_SCORE_THRESHOLD):
-    """
-    Filter chunks based on relevance score threshold and return scored chunks
-    """
-    scored_chunks = []
+"notices":["irdai.gov.in/notices1"]
+    }
+    relevant_urls = []
     
-    st.info(f"Evaluating {len(chunks)} chunks with relevance threshold: {threshold}")
+    # Find matching patterns with priority for exact matches
+    relevant_patterns = []
+    priority_patterns = []
     
-    for i, chunk in enumerate(chunks):
-        relevance_score = calculate_comprehensive_relevance_score(query, chunk, embeddings)
-        
-        scored_chunks.append({
-            'chunk': chunk,
-            'score': relevance_score,
-            'meets_threshold': relevance_score >= threshold
-        })
-    
-    # Sort by relevance score
-    scored_chunks.sort(key=lambda x: x['score'], reverse=True)
-    
-    # Filter chunks that meet threshold
-    qualifying_chunks = [sc for sc in scored_chunks if sc['meets_threshold']]
-    
-    # Display scoring statistics
-    with st.expander("Chunk Relevance Scoring Results"):
-        st.write(f"**Total chunks evaluated:** {len(chunks)}")
-        st.write(f"**Chunks meeting threshold ({threshold}):** {len(qualifying_chunks)}")
-        if scored_chunks:
-            st.write(f"**Highest score:** {max(sc['score'] for sc in scored_chunks):.3f}")
-            st.write(f"**Average score:** {np.mean([sc['score'] for sc in scored_chunks]):.3f}")
-        
-        st.write("**Top 5 Chunk Scores:**")
-        for i, sc in enumerate(scored_chunks[:5]):
-            status = "✅ Qualifying" if sc['meets_threshold'] else "❌ Below threshold"
-            source = sc['chunk'].metadata.get('source', 'Unknown')[:50]
-            st.write(f"{i+1}. Score: {sc['score']:.3f} - {status} - Source: {source}...")
-    
-    if not qualifying_chunks:
-        st.warning(f"No chunks met the relevance threshold of {threshold}. Consider lowering the threshold or refining your query.")
-        # Return top 3 chunks even if they don't meet threshold, but with warning
-        st.info("Returning top 3 chunks despite low scores to provide some response.")
-        return [sc['chunk'] for sc in scored_chunks[:3]], [sc['score'] for sc in scored_chunks[:3]]
-    
-    # Return qualifying chunks and their scores
-    qualifying_chunk_objects = [sc['chunk'] for sc in qualifying_chunks]
-    qualifying_scores = [sc['score'] for sc in qualifying_chunks]
-    
-    st.success(f"✅ {len(qualifying_chunks)} high-quality chunks selected for LLM processing")
-    
-    return qualifying_chunk_objects, qualifying_scores
-
-def extract_keywords_with_llm(query, llm):
-    """Extract keywords from query using LLM for better retrieval"""
-    try:
-        # Create keyword extraction prompt
-        keyword_prompt = ChatPromptTemplate.from_template(QUERY_ENHANCEMENT_PROMPT)
-        keyword_chain = keyword_prompt | llm
-        
-        # Get keywords from LLM
-        response = keyword_chain.invoke({"question": query})
-        
-        # Extract keywords from response
-        if hasattr(response, 'content'):
-            keywords_text = response.content.strip()
-        else:
-            keywords_text = str(response).strip()
-        
-        # Parse keywords
-        keywords = [kw.strip() for kw in keywords_text.split(',') if kw.strip()]
-        
-        # Limit to reasonable number
-        keywords = keywords[:12]
-        
-        return keywords, keywords_text
-        
-    except Exception as e:
-        st.warning(f"Keyword extraction failed: {e}. Using fallback method.")
-        # Fallback to simple keyword extraction
-        return extract_keywords_fallback(query), "Fallback method used"
-
-def extract_keywords_fallback(query):
-    """Fallback keyword extraction method"""
-    import re
-    
-    # Domain-specific terms to prioritize
-    domain_terms = [
-        'irdai', 'insurance', 'uidai', 'aadhaar', 'pmla', 'fema', 
-        'act', 'regulation', 'circular', 'guideline', 'amendment',
-        'notification', 'policy', 'compliance', 'recent', 'latest',
-        'new', 'updated', '2024', '2025'
-    ]
-    
-    # Extract words from query
-    words = re.findall(r'\b\w+\b', query.lower())
-    
-    # Prioritize domain terms
-    keywords = []
-    for term in domain_terms:
-        if term in query.lower():
-            keywords.append(term)
-    
-    # Add other significant words
-    for word in words:
-        if len(word) > 3 and word not in keywords:
-            keywords.append(word)
-    
-    return keywords[:10]
-
-def enhanced_retrieval_with_keywords(query, vector_db, hf_embedding, llm, k=8):
-    """Enhanced retrieval using LLM-extracted keywords with 0.80 threshold filtering"""
-    try:
-        # Step 1: Extract keywords using LLM
-        st.info("Extracting keywords using LLM...")
-        keywords, keywords_text = extract_keywords_with_llm(query, llm)
-        
-        # Display extracted keywords
-        with st.expander("Extracted Keywords for Retrieval"):
-            st.write("**Keywords extracted by LLM:**")
-            st.code(keywords_text)
-            st.write("**Processed keywords list:**")
-            st.write(", ".join(f"`{kw}`" for kw in keywords))
-        
-        # Step 2: Create enhanced search queries
-        enhanced_queries = []
-        
-        # Original query
-        enhanced_queries.append(query)
-        
-        # Keywords-only query
-        keywords_query = " ".join(keywords)
-        enhanced_queries.append(keywords_query)
-        
-        # Combined query with weights
-        combined_query = f"{query} {' '.join(keywords[:6])}"
-        enhanced_queries.append(combined_query)
-        
-        # Step 3: Retrieve more documents initially to have candidates for filtering
-        initial_k = max(k * 4, 24)  # Retrieve more chunks for filtering
-        all_retrieved_docs = []
-        doc_scores = {}
-        
-        st.info("Performing enhanced retrieval...")
-        
-        for i, search_query in enumerate(enhanced_queries):
-            try:
-                # Retrieve documents
-                docs = vector_db.similarity_search_with_score(search_query, k=initial_k)
-                
-                # Weight documents based on query type
-                query_weight = [1.0, 0.8, 0.9][i]  # Original, keywords-only, combined
-                
-                for doc, score in docs:
-                    doc_id = (doc.page_content[:100], doc.metadata.get('source', ''))
-                    
-                    if doc_id not in doc_scores:
-                        doc_scores[doc_id] = {'doc': doc, 'max_score': 0, 'query_matches': []}
-                    
-                    weighted_score = (1 / (score + 1e-6)) * query_weight  # Convert distance to similarity
-                    doc_scores[doc_id]['max_score'] = max(doc_scores[doc_id]['max_score'], weighted_score)
-                    doc_scores[doc_id]['query_matches'].append(f"Query {i+1}: {weighted_score:.3f}")
-                    
-            except Exception as e:
-                st.warning(f"Retrieval failed for query {i+1}: {e}")
-                continue
-        
-        # Step 4: Get all candidate documents
-        if doc_scores:
-            candidate_docs = [doc_info['doc'] for doc_info in doc_scores.values()]
-            
-            # Step 5: Apply relevance threshold filtering
-            st.info("Applying relevance threshold filtering...")
-            filtered_docs, relevance_scores = filter_chunks_by_relevance(
-                query, candidate_docs, hf_embedding, RELEVANCE_SCORE_THRESHOLD
-            )
-            
-            # Step 6: Final ranking and selection
-            if filtered_docs:
-                # Limit to k documents for final processing
-                final_docs = filtered_docs[:k]
-                
-                # Display retrieval stats
-                with st.expander("Enhanced Retrieval Statistics"):
-                    st.write(f"**Initial candidates found:** {len(candidate_docs)}")
-                    st.write(f"**Chunks meeting 0.80 threshold:** {len(filtered_docs)}")
-                    st.write(f"**Final selected documents:** {len(final_docs)}")
-                    
-                    st.write("**Top 3 selected documents with scores:**")
-                    for i, (doc, score) in enumerate(zip(final_docs[:3], relevance_scores[:3])):
-                        st.write(f"**Document {i+1}:**")
-                        st.write(f"- Source: {doc.metadata.get('source', 'Unknown')}")
-                        st.write(f"- Relevance Score: {score:.3f}")
-                        st.write(f"- Content Preview: {doc.page_content[:100]}...")
-                
-                return final_docs
+    # Check for exact keyword matches first (highest priority)
+    for keyword, patterns in url_keywords.items():
+        if keyword in query_lower:
+            if keyword in ['rule', 'rules', 'latest rules']:
+                priority_patterns.extend(patterns)
             else:
-                st.warning("No documents met the 0.80 relevance threshold. Returning top candidates with lower scores.")
-                return candidate_docs[:k]
-            
-        else:
-            st.warning("No documents retrieved. Falling back to simple retrieval.")
-            return vector_db.similarity_search(query, k=k)
-            
-    except Exception as e:
-        st.error(f"Enhanced retrieval failed: {e}")
-        st.warning("Falling back to simple retrieval method.")
-        return vector_db.similarity_search(query, k=k)
+                relevant_patterns.extend(patterns)
+    
+    # Prioritize rules patterns if found
+    if priority_patterns:
+        relevant_patterns = priority_patterns + relevant_patterns
+    
+    # If no specific patterns found, return all URLs
+    if not relevant_patterns:
+        return urls
+    
+    # Filter URLs based on patterns with priority order
+    filtered_urls = []
+    seen_urls = set()
+    
+    # First add URLs matching priority patterns
+    for pattern in priority_patterns:
+        for url in urls:
+            if pattern in url and url not in seen_urls:
+                filtered_urls.append(url)
+                seen_urls.add(url)
+    
+    # Then add URLs matching other relevant patterns
+    for pattern in relevant_patterns:
+        if pattern not in priority_patterns:  # Avoid duplicates
+            for url in urls:
+                if pattern in url and url not in seen_urls:
+                    filtered_urls.append(url)
+                    seen_urls.add(url)
+    
+    # If no URLs match patterns, return original URLs to avoid empty results
+    return filtered_urls if filtered_urls else urls
 
-def create_enhanced_retrieval_chain(llm, vector_db, hf_embedding, prompt):
-    """Create a retrieval chain with enhanced keyword-based retrieval and 0.80 threshold"""
-    
-    class EnhancedRetriever:
-        def __init__(self, vector_db, hf_embedding, llm, k=6):
-            self.vector_db = vector_db
-            self.hf_embedding = hf_embedding
-            self.llm = llm
-            self.k = k
-        
-        def get_relevant_documents(self, query):
-            return enhanced_retrieval_with_keywords(
-                query, self.vector_db, self.hf_embedding, self.llm, self.k
-            )
-        
-        def invoke(self, input_dict):
-            query = input_dict.get("input", input_dict.get("query", ""))
-            return self.get_relevant_documents(query)
-    
-    # Create enhanced retriever
-    enhanced_retriever = EnhancedRetriever(vector_db, hf_embedding, llm)
-    
-    # Create document chain
-    document_chain = create_stuff_documents_chain(llm, prompt)
-    
-    # Create custom retrieval chain
-    class EnhancedRetrievalChain:
-        def __init__(self, retriever, document_chain):
-            self.retriever = retriever
-            self.document_chain = document_chain
-        
-        def invoke(self, input_dict):
-            # Get query
-            query = input_dict["input"]
-            
-            # Retrieve documents with 0.80 threshold
-            docs = self.retriever.get_relevant_documents(query)
-            
-            # Generate answer
-            result = self.document_chain.invoke({"input": query, "context": docs})
-            
-            return {"answer": result, "context": docs}
-    
-    return EnhancedRetrievalChain(enhanced_retriever, document_chain)
-
-def relevance_score(query, document, embeddings):
+def enhanced_relevance_score(query, document, embeddings):
+    """Enhanced relevance scoring with multiple factors"""
     try:
+        # Base semantic similarity
         query_embedding = embeddings.embed_query(query)
         document_embedding = embeddings.embed_documents([document.page_content])[0]
         similarity = cosine_similarity([query_embedding], [document_embedding])[0][0]
         
-        keywords = query.lower().split()
-        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-        keyword_bonus = keyword_matches * 0.1
+        # Keyword matching with weights
+        query_keywords = query.lower().split()
+        content_lower = document.page_content.lower()
         
-        return similarity + keyword_bonus
+        # High-value keywords get more weight
+        high_value_keywords = ['act', 'circular', 'guideline', 'regulation', 'amendment', 'notification', 'rule', 'policy']
+        keyword_score = 0
+        
+        for keyword in query_keywords:
+            if keyword in content_lower:
+                if keyword in high_value_keywords:
+                    keyword_score += 0.2
+                else:
+                    keyword_score += 0.1
+        
+        # Domain importance bonus
+        source_url = document.metadata.get('source', '')
+        domain_bonus = 0
+        
+        # IRDAI gets highest priority for insurance-related queries
+        if 'irdai.gov.in' in source_url:
+            if any(term in query.lower() for term in ['insurance', 'act', 'circular', 'guideline']):
+                domain_bonus += 0.15
+        
+        # UIDAI for aadhaar-related queries
+        if 'uidai.gov.in' in source_url:
+            if any(term in query.lower() for term in ['aadhaar', 'uid', 'identity']):
+                domain_bonus += 0.15
+        
+        # Enforcement directorate for FEMA/PMLA queries
+        if 'enforcementdirectorate.gov.in' in source_url:
+            if any(term in query.lower() for term in ['fema', 'pmla', 'money laundering', 'enforcement']):
+                domain_bonus += 0.15
+        
+        # # Source credibility bonus (acts > circulars > guidelines > others)
+        # if '/acts' in source_url:
+        #     domain_bonus += 0.1
+        # elif '/circulars' in source_url:
+        #     domain_bonus += 0.08
+        # elif '/guidelines' in source_url:
+        #     domain_bonus += 0.06
+        
+        # Recency bonus for recent years (if mentioned in content)
+        current_year = 2024
+        for year in range(current_year-2, current_year+1):
+            if str(year) in content_lower:
+                domain_bonus += 0.05
+                break
+        
+        final_score = similarity + keyword_score + domain_bonus
+        return min(final_score, 1.0)  # Cap at 1.0
+        
     except Exception as e:
-        keywords = query.lower().split()
-        keyword_matches = sum(1 for keyword in keywords if keyword in document.page_content.lower())
-        return keyword_matches * 0.2
+        # Fallback to keyword matching
+        query_keywords = query.lower().split()
+        keyword_matches = sum(1 for keyword in query_keywords if keyword in document.page_content.lower())
+        return min(keyword_matches * 0.15, 1.0)
+
+def relevance_score(query, document, embeddings):
+    return enhanced_relevance_score(query, document, embeddings)
+
+def re_rank_documents(query, documents, embeddings):
+    if not documents:
+        return []
+    
+    if embeddings is None:
+        st.warning("Embeddings not available, using original document order")
+        return documents
+        
+    try:
+        scored_docs = [(doc, relevance_score(query, doc, embeddings)) for doc in documents]
+        
+        scored_docs = [(doc, score) for doc, score in scored_docs if score >= RELEVANCE_SCORE_THRESHOLD]
+        
+        if not scored_docs:
+            st.warning("No documents passed relevance threshold, using original documents")
+            return documents[:6]
+        
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_doc_source = scored_docs[0][0].metadata.get("source", "")
+        
+        source_groups = {}
+        for doc, score in scored_docs:
+            source = doc.metadata.get("source", "")
+            if source not in source_groups:
+                source_groups[source] = []
+            source_groups[source].append((doc, score))
+        
+        final_ranked_docs = []
+        if top_doc_source in source_groups:
+            top_source_docs = sorted(
+                source_groups[top_doc_source], 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in top_source_docs])
+            del source_groups[top_doc_source]
+        
+        other_sources = []
+        for source, docs in source_groups.items():
+            avg_source_score = sum(score for _, score in docs) / len(docs)
+            other_sources.append((source, avg_source_score, docs))
+        
+        other_sources.sort(key=lambda x: x[1], reverse=True)
+        
+        for source, avg_score, docs in other_sources:
+            sorted_docs = sorted(
+                docs, 
+                key=lambda x: (x[0].metadata.get("page_number", 0), -x[1])
+            )
+            final_ranked_docs.extend([doc for doc, score in sorted_docs])
+        
+        # Enhance chunks with source URL and document links
+        enhanced_docs = enhance_chunks_with_links(final_ranked_docs)
+        return enhanced_docs
+        
+    except Exception as e:
+        st.error(f"Error in re-ranking documents: {e}")
+        st.warning("Falling back to original document order")
+        return documents
 
 def enhanced_web_scrape(url):
     try:
@@ -488,118 +367,237 @@ def enhanced_web_scrape(url):
         st.error(f"Enhanced scraping failed for {url}: {e}")
         return None
 
+
 def extract_document_links(html_content, url):
     soup = BeautifulSoup(html_content, 'html.parser')
     
+    # Remove scripts and styles
     for script in soup(["script", "style"]):
         script.decompose()
     
     document_links = []
     
-    all_links = soup.find_all('a', href=True)
-    for link in all_links:
-        href = link.get('href')
-        link_text = link.get_text(strip=True)
-        
-        if not href or len(link_text) < 3:
-            continue
-            
-        if href.startswith('/'):
-            href = urljoin(url, href)
-        elif not href.startswith(('http://', 'https://')):
-            href = urljoin(url, href)
-        
-        document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                           'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
-        
-        has_doc_keywords = any(keyword in link_text.lower() for keyword in document_keywords)
-        
-        if has_doc_keywords and len(link_text) > 5:
-            document_links.append({
-                'title': link_text,
-                'link': href,
-                'type': 'content'
-            })
-    
+    # Pattern 1: Look for tables with "Documents" or "Download" columns
     tables = soup.find_all('table')
     for table in tables:
-        rows = table.find_all('tr')
+        # Get table headers to identify column structure
+        headers = []
+        header_row = table.find('tr')
+        if header_row:
+            header_cells = header_row.find_all(['th', 'td'])
+            headers = [cell.get_text(strip=True).lower() for cell in header_cells]
+        
+        # Find Documents or Download column index
+        doc_col_index = -1
+        title_col_index = -1
+        date_col_index = -1
+        
+        for i, header in enumerate(headers):
+            if 'document' in header or 'download' in header:
+                doc_col_index = i
+            elif 'title' in header or 'name' in header or header == 'sr.no.' or header.startswith('sr'):
+                title_col_index = i
+            elif 'date' in header or 'updated' in header:
+                date_col_index = i
+        
+        # Process table rows
+        rows = table.find_all('tr')[1:]  # Skip header row
         for row in rows:
             cells = row.find_all(['td', 'th'])
-            if len(cells) >= 2:
-                for cell in cells:
-                    links_in_cell = cell.find_all('a', href=True)
-                    for link in links_in_cell:
-                        href = link.get('href')
-                        link_text = link.get_text(strip=True)
+            if len(cells) < 2:
+                continue
+            
+            # Extract document link from Documents/Download column
+            doc_link = None
+            doc_title = ""
+            doc_date = "No date"
+            
+            if doc_col_index != -1 and doc_col_index < len(cells):
+                # Look for links in Documents/Download column
+                doc_cell = cells[doc_col_index]
+                link_elem = doc_cell.find('a', href=True)
+                
+                if link_elem:
+                    doc_link = link_elem['href']
+                    # If title is in the link text, use it
+                    if link_elem.get_text(strip=True):
+                        doc_title = link_elem.get_text(strip=True)
+                
+                # Also check for PDF icons or download buttons
+                if not doc_link:
+                    # Look for images that might be PDF icons
+                    img_links = doc_cell.find_all('img')
+                    for img in img_links:
+                        parent_link = img.find_parent('a', href=True)
+                        if parent_link:
+                            doc_link = parent_link['href']
+                            break
+            
+            # If no Documents column, check first few cells for links
+            if not doc_link:
+                for i, cell in enumerate(cells[:3]):  # Check first 3 columns
+                    link_elem = cell.find('a', href=True)
+                    if link_elem and link_elem['href']:
+                        href = link_elem['href']
+                        # Check if it's a document link
+                        if (any(href.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']) or
+                            'download' in href.lower() or 'document' in href.lower()):
+                            doc_link = href
+                            if not doc_title:
+                                doc_title = link_elem.get_text(strip=True)
+                            break
+            
+            # Extract title from title column or first column
+            if not doc_title and title_col_index != -1 and title_col_index < len(cells):
+                title_cell = cells[title_col_index]
+                # Remove serial numbers
+                title_text = title_cell.get_text(strip=True)
+                title_text = re.sub(r'^\d+\.?\s*', '', title_text)
+                doc_title = title_text
+            elif not doc_title and len(cells) > 0:
+                # Use first cell as title, removing serial numbers
+                title_text = cells[0].get_text(strip=True)
+                title_text = re.sub(r'^\d+\.?\s*', '', title_text)
+                doc_title = title_text
+            
+            # Extract date
+            if date_col_index != -1 and date_col_index < len(cells):
+                doc_date = cells[date_col_index].get_text(strip=True)
+            elif len(cells) > 1 and not doc_date:
+                # Try to find date in second column
+                potential_date = cells[1].get_text(strip=True)
+                if re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}', potential_date):
+                    doc_date = potential_date
+            
+            # Clean up and add document link
+            if doc_link:
+                # Handle relative URLs
+                if doc_link.startswith('/'):
+                    doc_link = urljoin(url, doc_link)
+                elif not doc_link.startswith(('http://', 'https://')):
+                    doc_link = urljoin(url, doc_link)
+                
+                # Clean up date text
+                doc_date = re.sub(r'\s+', ' ', doc_date).strip()
+                
+                # Clean up title
+                if not doc_title or len(doc_title) < 3:
+                    doc_title = f"Document {len(document_links) + 1}"
+                
+                document_links.append({
+                    'title': doc_title,
+                    'link': doc_link,
+                    'date': doc_date,
+                    'type': 'document'
+                })
+    
+    # Pattern 2: Look for numbered list items with download links (UIDAI pattern)
+    if not document_links:
+        # Find numbered items in the page
+        numbered_items = soup.find_all(['p', 'div', 'li'], string=re.compile(r'^\d+\.'))
+        
+        for item in numbered_items:
+            # Look for download links near this item
+            container = item.find_parent(['div', 'section', 'article']) or item.parent
+            if container:
+                # Find download link in the same container
+                download_links = container.find_all('a', href=True)
+                for link in download_links:
+                    href = link['href']
+                    if (any(href.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']) or
+                        'download' in href.lower()):
                         
-                        if not href or len(link_text) < 5:
-                            continue
-                            
+                        # Handle relative URLs
                         if href.startswith('/'):
                             href = urljoin(url, href)
                         elif not href.startswith(('http://', 'https://')):
                             href = urljoin(url, href)
                         
-                        document_patterns = [
-                            r'act.*\d{4}',
-                            r'circular.*\d+',
-                            r'amendment.*act',
-                            r'insurance.*act',
-                            r'guideline',
-                            r'master.*direction',
-                            r'regulation.*\d+',
-                            r'aadhaar.*act'
-                        ]
+                        title_text = item.get_text(strip=True)
+                        title_text = re.sub(r'^\d+\.?\s*', '', title_text)
                         
-                        is_likely_document = any(re.search(pattern, link_text.lower()) for pattern in document_patterns)
-                        
-                        if is_likely_document:
-                            document_links.append({
-                                'title': link_text,
-                                'link': href,
-                                'type': 'reference'
-                            })
-    
-    content_sections = soup.find_all(['div', 'section', 'article'])
-    for section in content_sections:
-        section_text = section.get_text().lower()
-        if any(keyword in section_text for keyword in ['act', 'circular', 'regulation', 'guideline']):
-            links_in_section = section.find_all('a', href=True)
-            for link in links_in_section:
-                href = link.get('href')
-                link_text = link.get_text(strip=True)
-                
-                if not href or len(link_text) < 5:
-                    continue
-                
-                if href.startswith('/'):
-                    href = urljoin(url, href)
-                elif not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
-                
-                if 10 < len(link_text) < 200:
-                    document_keywords = ['act', 'circular', 'guideline', 'regulation', 'rule', 
-                                       'amendment', 'notification', 'insurance', 'policy', 'aadhaar']
-                    if any(keyword in link_text.lower() for keyword in document_keywords):
                         document_links.append({
-                            'title': link_text,
+                            'title': title_text or f"Document {len(document_links) + 1}",
                             'link': href,
-                            'type': 'reference'
+                            'date': 'No date',
+                            'type': 'document'
+                        })
+                        break
+    
+    # Pattern 3: Look for "Documents" or "Download" sections if no links found in tables
+    if not document_links:
+        download_sections = soup.find_all(['div', 'section', 'h2', 'h3'], 
+            string=re.compile(r'(?i)(documents?|downloads?|files?|resources?)'))
+        
+        for section in download_sections:
+            # Get the parent container of the section
+            container = section.find_parent(['div', 'section', 'article']) or section.parent
+            if container:
+                # Extract all links in this section
+                links = container.find_all('a', href=True)
+                for link in links:
+                    href = link['href']
+                    link_text = link.get_text(strip=True)
+                    
+                    if not href or len(link_text) < 3:
+                        continue
+                        
+                    if href.startswith('/'):
+                        href = urljoin(url, href)
+                    elif not href.startswith(('http://', 'https://')):
+                        href = urljoin(url, href)
+                        
+                    # Check if it's a document link
+                    if any(href.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx']):
+                        document_links.append({
+                            'title': link_text or "Document",
+                            'link': href,
+                            'date': 'No date',
+                            'type': 'document'
                         })
     
+    # Pattern 4: Direct document links in the page (fallback)
+    if not document_links:
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            link_text = link.get_text(strip=True)
+            
+            # Skip empty or very short links
+            if not href or len(link_text) < 3:
+                continue
+                
+            # Handle relative URLs
+            if href.startswith('/'):
+                href = urljoin(url, href)
+            elif not href.startswith(('http://', 'https://')):
+                href = urljoin(url, href)
+            
+            # Check for document file extensions
+            is_document = any(href.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx'])
+            
+            # Check for document detail pages
+            is_document_page = any(term in href.lower() for term in ['document-detail', 'documentId=', 'view-document', 'download'])
+            
+            # Check for download in link text
+            has_download_text = any(term in link_text.lower() for term in ['download', 'view', 'pdf', 'doc', 'xls'])
+            
+            if (is_document or is_document_page or has_download_text) and not any(dl['link'] == href for dl in document_links):
+                document_links.append({
+                    'title': link_text or f"Document {len(document_links) + 1}",
+                    'link': href,
+                    'date': 'No date',
+                    'type': 'document' if is_document else 'reference'
+                })
+    
+    # Remove duplicates
     seen_links = set()
-    unique_document_links = []
-    for link_info in document_links:
-        link_key = (link_info['title'], link_info['link'])
-        if link_key not in seen_links:
-            seen_links.add(link_key)
-            unique_document_links.append(link_info)
+    unique_links = []
+    for link in document_links:
+        if link['link'] not in seen_links:
+            seen_links.add(link['link'])
+            unique_links.append(link)
     
-    unique_document_links.sort(key=lambda x: (x['type'] != 'content', x['title']))
-    
-    return unique_document_links
-
+    return unique_links
 def format_document_links_for_embedding(document_links):
     if not document_links:
         return ""
@@ -611,13 +609,13 @@ def format_document_links_for_embedding(document_links):
     
     if content_docs:
         formatted_links += "\n[CONTENT PAGES]\n"
-        for i, link_info in enumerate(content_docs[:10]):
-            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(content_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
     
     if ref_docs:
         formatted_links += "\n[REFERENCE DOCUMENTS]\n"
-        for i, link_info in enumerate(ref_docs[:10]):
-            formatted_links += f"{i+1}. {link_info['title']} - {link_info['link']}\n"
+        for i, link_info in enumerate(ref_docs, 1):
+            formatted_links += f"{i}. {link_info['title']} - {link_info['link']}\n"
     
     formatted_links += "=== END DOCUMENT LINKS ===\n\n"
     
@@ -655,10 +653,15 @@ def extract_structured_content(html_content, url):
     
     return enhanced_text, content_sections
 
-def load_hardcoded_websites():
+def load_hardcoded_websites(query=None):
     loaded_docs = []
     
-    for url in HARDCODED_WEBSITES:
+    # Filter URLs based on query if provided
+    urls_to_load = HARDCODED_WEBSITES
+    if query:
+        urls_to_load = filter_urls_by_query(query, HARDCODED_WEBSITES)
+    
+    for url in urls_to_load:
         try:
             st.write(f"Loading URL: {url}")
             
@@ -699,7 +702,7 @@ def load_hardcoded_websites():
                             for i, link_info in enumerate(ref_docs[:10]):
                                 st.write(f"{i+1}. [{link_info['title']}]({link_info['link']})")
                         
-                        st.success(f"Document links have been embedded into the text content for better retrieval")
+                        st.success(f"✅ Document links have been embedded into the text content for better retrieval")
                 else:
                     st.write(f"No relevant document links found from {url}")
             
@@ -720,7 +723,7 @@ def is_fallback_response(response_text):
     
     return any(phrase in response_text for phrase in fallback_phrases)
 
-def display_chunks(chunks, title="Top Retrieved Chunks"):
+def display_chunks(chunks, title="Top 3 Retrieved Chunks"):
     st.subheader(title)
     
     for i, chunk in enumerate(chunks[:3], 1):
@@ -764,21 +767,20 @@ def display_chunks(chunks, title="Top Retrieved Chunks"):
                 st.write(f"**Document Links Count:** {len(metadata.get('document_links', []))}")
 
 def enhance_documents_before_chunking(documents):
-    """Add source URL and document links to each document before chunking"""
+    """Add source URL and document links to documents before chunking"""
     enhanced_documents = []
     
     for doc in documents:
         source_url = doc.metadata.get('source', 'Unknown')
         document_links = doc.metadata.get('document_links', [])
         
-        # Create source line
+        # Create source line with document links
         source_line = f"Source URL: {source_url}"
         
-        # Add document links if available
         if document_links:
             links_text = " | Document Links: "
             link_titles = []
-            for link in document_links[:5]:  # Include more links since we have space
+            for link in document_links[:5]:  # Limit to first 5 links
                 link_titles.append(f"{link['title']} ({link['link']})")
             links_text += "; ".join(link_titles)
             if len(document_links) > 5:
@@ -797,7 +799,40 @@ def enhance_documents_before_chunking(documents):
     
     return enhanced_documents
 
-# Initialize session state
+def enhance_chunks_with_links(chunks):
+    """Add source URL and document links to the first line of each chunk"""
+    enhanced_chunks = []
+    
+    for chunk in chunks:
+        source_url = chunk.metadata.get('source', 'Unknown')
+        document_links = chunk.metadata.get('document_links', [])
+        
+        # Create source line
+        source_line = f"Source URL: {source_url}"
+        
+        # Add document links if available
+        if document_links:
+            links_text = " | Document Links: "
+            link_titles = []
+            for link in document_links[:3]:  # Limit to first 3 links to avoid too long first line
+                link_titles.append(f"{link['title']} ({link['link']})")
+            links_text += "; ".join(link_titles)
+            if len(document_links) > 3:
+                links_text += f" and {len(document_links) - 3} more..."
+            source_line += links_text
+        
+        # Add source line to the beginning of chunk content
+        enhanced_content = source_line + "\n\n" + chunk.page_content
+        
+        # Create new chunk with enhanced content
+        enhanced_chunk = Document(
+            page_content=enhanced_content,
+            metadata=chunk.metadata
+        )
+        enhanced_chunks.append(enhanced_chunk)
+    
+    return enhanced_chunks
+
 if 'loaded_docs' not in st.session_state:
     st.session_state['loaded_docs'] = []
 if 'vector_db' not in st.session_state:
@@ -813,8 +848,7 @@ if 'hf_embedding' not in st.session_state:
 if 'prompt' not in st.session_state:
     st.session_state['prompt'] = None
 
-st.title("Enhanced Web GEN-ie with 0.80 Relevance Threshold")
-st.markdown("*Powered by intelligent keyword extraction and high-precision document retrieval (0.80 threshold)*")
+st.title("Web GEN-ie")
 
 st.subheader("Azure OpenAI Configuration")
 
@@ -847,9 +881,6 @@ with col2:
         index=0,
         help="Azure OpenAI API version"
     )
-
-# Display current threshold setting
-st.info(f"Current Relevance Score Threshold: **{RELEVANCE_SCORE_THRESHOLD}** (Only chunks scoring above this threshold will be sent to LLM)")
 
 config_complete = all([azure_endpoint, api_key, deployment_name, api_version])
 
@@ -897,10 +928,11 @@ Answer:"""
                             st.warning("Using fallback prompt template")
                         
                         text_splitter = SemanticChunker(
-                            embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
-                            breakpoint_threshold_type="percentile",
-                            breakpoint_threshold_amount=95,
-                            min_chunk_size=400
+                       embeddings=HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"),
+                       breakpoint_threshold_type="percentile",
+                      breakpoint_threshold_amount=95,
+                      min_chunk_size=400
+                       
                         )
                         
                         enhanced_docs = enhance_documents_before_chunking(st.session_state['loaded_docs'])
@@ -914,203 +946,122 @@ Answer:"""
                         
                         st.session_state['vector_db'] = FAISS.from_documents(document_chunks, hf_embedding)
                         
+                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
                         document_chain = create_stuff_documents_chain(llm, st.session_state['prompt'])
-                        retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 6})
                         st.session_state['retrieval_chain'] = create_retrieval_chain(retriever, document_chain)
                         
                         st.session_state['docs_loaded'] = True
-                        st.success("Documents processed with embedded links and ready for enhanced querying with 0.80 threshold!")
+                        st.success("Documents processed with embedded links and ready for querying!")
                     
                     except Exception as e:
                         st.error(f"Error initializing Azure OpenAI: {e}")
                         st.error("Please check your Azure OpenAI configuration and try again.")
 
-st.subheader("Ask Questions with Enhanced Retrieval (0.80 Threshold)")
+st.subheader("Ask Questions")
+query = st.text_input("Enter your query:", value="What are the recent Insurance Acts and amendments?")
 
-# Query input with example suggestions
-col1, col2 = st.columns([3, 1])
-with col1:
-    query = st.text_input(
-        "Enter your query:", 
-        value="What are the recent Insurance Acts and amendments?",
-        help="Ask questions about IRDAI regulations, insurance acts, PMLA, FEMA, or related topics"
-    )
+show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
 
-with col2:
-    st.markdown("**Example queries:**")
-    example_queries = [
-        "Latest IRDAI guidelines",
-        "Recent insurance amendments",
-        "New PMLA regulations",
-        "FEMA compliance updates"
-    ]
-    
-    for example in example_queries:
-        if st.button(f"{example}", key=f"example_{example}"):
-            query = example
-            st.rerun()
-
-# Options
-col1, col2 = st.columns(2)
-with col1:
-    show_chunks = st.checkbox("Show retrieved chunks used for answer generation", value=True)
-with col2:
-    retrieval_method = st.selectbox(
-        "Retrieval Method:",
-        ["Enhanced (LLM Keywords + 0.80 Threshold)", "Standard"],
-        index=0,
-        help="Choose between enhanced LLM-based keyword extraction with 0.80 threshold or standard retrieval"
-    )
-
-# Query processing
 if st.button("Get Answer", disabled=not config_complete) and query:
     if not config_complete:
         st.error("Please complete the Azure OpenAI configuration first.")
     elif st.session_state.get('vector_db') and st.session_state.get('llm'):
-        if retrieval_method == "Enhanced (LLM Keywords + 0.80 Threshold)":
-            # Enhanced retrieval with LLM keyword extraction and 0.80 threshold
-            with st.spinner("Processing query with enhanced retrieval and 0.80 threshold..."):
-                try:
-                    # Create enhanced retrieval chain
-                    enhanced_chain = create_enhanced_retrieval_chain(
-                        st.session_state['llm'],
-                        st.session_state['vector_db'],
-                        st.session_state['hf_embedding'],
-                        st.session_state['prompt']
+        with st.spinner("Searching and generating answer..."):
+            try:
+                if st.session_state.get('hf_embedding') is None:
+                    st.info("Initializing embeddings...")
+                    st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
+                
+                if st.session_state.get('prompt') is None:
+                    st.info("Creating prompt template...")
+                    prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
+                    st.session_state['prompt'] = prompt
+                
+                # Load query-specific documents for better accuracy
+                st.info(f"Loading documents relevant to query: {query}")
+                query_specific_docs = load_hardcoded_websites(query)
+                
+                # Create temporary vector store with query-specific documents
+                if query_specific_docs:
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=800,
+                        chunk_overlap=150,
+                        length_function=len,
+                        separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
                     )
                     
-                    # Process query
-                    response = enhanced_chain.invoke({"input": query})
+                    # Split documents into chunks
+                    query_chunks = text_splitter.split_documents(query_specific_docs)
                     
-                    # Display response
-                    st.subheader("Enhanced Response (0.80 Threshold):")
-                    st.write(response['answer'])
+                    # Create temporary vector store
+                    temp_vector_db = FAISS.from_documents(
+                        query_chunks, 
+                        st.session_state['hf_embedding']
+                    )
                     
-                    # Show retrieved chunks if enabled
-                    if show_chunks and 'context' in response:
-                        retrieved_docs = response['context']
-                        if retrieved_docs:
-                            display_chunks(retrieved_docs, "Documents Used for Enhanced Answer (0.80+ Score)")
-                            
-                            # Show source URLs
-                            sources = set()
-                            for doc in retrieved_docs:
-                                source = doc.metadata.get('source', 'Unknown')
-                                sources.add(source)
-                            
-                            st.write("\n**Information Sources:**")
-                            for i, source in enumerate(sources, 1):
-                                st.write(f"{i}. [{source}]({source})")
-                    
-                    st.success("Enhanced retrieval with 0.80 threshold completed!")
-                    
-                except Exception as e:
-                    st.error(f"Enhanced processing failed: {e}")
-                    # Fallback to original method
-                    st.info("Falling back to standard retrieval...")
-                    response = st.session_state['retrieval_chain'].invoke({"input": query})
-                    st.subheader("Standard Response:")
-                    st.write(response['answer'])
-        else:
-            # Standard retrieval method
-            with st.spinner("Processing query with standard retrieval..."):
-                try:
-                    if st.session_state.get('hf_embedding') is None:
-                        st.info("Initializing embeddings...")
-                        st.session_state['hf_embedding'] = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
-                    
-                    if st.session_state.get('prompt') is None:
-                        st.info("Creating prompt template...")
-                        prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT_TEMPLATE)
-                        st.session_state['prompt'] = prompt
-                    
-                    response = st.session_state['retrieval_chain'].invoke({"input": query})
-                    
-                    st.subheader("Standard Response:")
-                    st.write(response['answer'])
-                    
-                    if show_chunks and 'context' in response:
-                        retrieved_docs = response['context']
-                        if retrieved_docs:
-                            display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
-                            
-                            links_used = 0
-                            for doc in retrieved_docs:
-                                if "Source URL:" in doc.page_content:
-                                    links_used += 1
-                            
-                            if links_used > 0:
-                                st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained source URLs and document links")
-                            else:
-                                st.info("No chunks with source URLs and document links were retrieved for this query")
-                        else:
-                            st.info("No chunks were retrieved for this query.")
-                    
-                    if not is_fallback_response(response['answer']):
-                        st.write("\n**Information Sources:**")
-                        sources = set()
-                        retrieved_docs = response.get('context', [])
-                        for doc in retrieved_docs:
-                            source = doc.metadata.get('source', 'Unknown')
-                            sources.add(source)
-                        
-                        for i, source in enumerate(sources, 1):
-                            st.write(f"{i}. [{source}]({source})")
-                    else:
-                        st.info("No specific documents or sources are available for this query as it falls outside the current data scope.")
+                    # Retrieve from query-specific vector store
+                    raw_retriever = temp_vector_db.as_retriever(search_kwargs={"k": 20})
+                    raw_docs = raw_retriever.get_relevant_documents(query)
+                else:
+                    # Fallback to original vector store
+                    raw_retriever = st.session_state['vector_db'].as_retriever(search_kwargs={"k": 20})
+                    raw_docs = raw_retriever.get_relevant_documents(query)
                 
-                except Exception as e:
-                    st.error(f"Error generating response: {e}")
-                    st.error("Please check your Azure OpenAI configuration and try again.")
-                    st.error("Debug Info:")
-                    st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
-                    st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
-                    st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
-                    st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
+                # Filter URLs based on query
+                filtered_urls = filter_urls_by_query(query, [doc.metadata.get('source', '') for doc in raw_docs])
+                filtered_docs = [doc for doc in raw_docs if doc.metadata.get('source', '') in filtered_urls]
+                
+                # Re-rank documents using enhanced scoring
+                reranked_docs = re_rank_documents(query, filtered_docs, st.session_state['hf_embedding'])
+                final_docs = reranked_docs[:6]
+                
+                # Create response using document chain
+                document_chain = create_stuff_documents_chain(st.session_state['llm'], st.session_state['prompt'])
+                response = document_chain.invoke({"input": query, "context": final_docs})
+                
+                # Format response to match expected structure
+                response = {"answer": response, "context": final_docs}
+                
+                st.subheader("Response:")
+                st.write(response['answer'])
+                
+                if show_chunks and 'context' in response:
+                    retrieved_docs = response['context']
+                    if retrieved_docs:
+                        display_chunks(retrieved_docs, "Top Chunks Used for Answer Generation")
+                        
+                        links_used = 0
+                        for doc in retrieved_docs:
+                            if "=== RELEVANT DOCUMENT LINKS ===" in doc.page_content:
+                                links_used += 1
+                        
+                        if links_used > 0:
+                            st.success(f"{links_used} out of {len(retrieved_docs)} chunks contained embedded document links that were sent to the LLM")
+                        else:
+                            st.info("ℹ️ No chunks with embedded document links were retrieved for this query")
+                    else:
+                        st.info("No chunks were retrieved for this query.")
+                
+                if not is_fallback_response(response['answer']):
+                    st.write("\n**📍 Information Sources:**")
+                    sources = set()
+                    retrieved_docs = response.get('context', [])
+                    for doc in retrieved_docs:
+                        source = doc.metadata.get('source', 'Unknown')
+                        sources.add(source)
+                    
+                    for i, source in enumerate(sources, 1):
+                        st.write(f"{i}. [{source}]({source})")
+                else:
+                    st.info("ℹ️ No specific documents or sources are available for this query as it falls outside the current data scope.")
+            
+            except Exception as e:
+                st.error(f"Error generating response: {e}")
+                st.error("Please check your Azure OpenAI configuration and try again.")
+                st.error("Debug Info:")
+                st.write(f"- LLM available: {st.session_state.get('llm') is not None}")
+                st.write(f"- Vector DB available: {st.session_state.get('vector_db') is not None}")
+                st.write(f"- Prompt available: {st.session_state.get('prompt') is not None}")
+                st.write(f"- Embeddings available: {st.session_state.get('hf_embedding') is not None}")
     else:
         st.warning("Please load websites first by clicking the 'Load Websites' button.")
-
-# Sidebar with information
-with st.sidebar:
-    st.header("About Enhanced Web GEN-ie")
-    
-    st.markdown(f"""
-    ### Key Features:
-    - **LLM Keyword Extraction**: Intelligent query processing using GPT
-    - **0.80 Relevance Threshold**: Only high-quality chunks sent to LLM
-    - **Enhanced Retrieval**: Multi-query search with weighted scoring
-    - **Document Link Integration**: Embedded reference links in chunks
-    - **Source Attribution**: Always includes source URLs
-    - **Regulatory Focus**: Specialized for IRDAI, PMLA, FEMA content
-    
-    ### How 0.80 Threshold Works:
-    1. **Initial Retrieval**: Get candidate chunks from vector database
-    2. **Comprehensive Scoring**: Semantic similarity + keyword matching + domain relevance
-    3. **Quality Filtering**: Only chunks scoring ≥ 0.80 sent to LLM
-    4. **Enhanced Accuracy**: Higher precision, more relevant responses
-    
-    ### Current Settings:
-    - **Relevance Threshold**: {RELEVANCE_SCORE_THRESHOLD}
-    - **Semantic Weight**: 60%
-    - **Keyword Weight**: 20%
-    - **Domain Boost**: 12%
-    - **Quality Indicators**: 8%
-    
-    ### Data Sources:
-    - IRDAI official website
-    - Enforcement Directorate (FEMA)
-    - Regulatory notifications & circulars
-    - Policy guidelines & amendments
-    """)
-    
-    if st.session_state.get('docs_loaded'):
-        st.success("Documents loaded and ready!")
-        st.metric("Total Documents", len(st.session_state.get('loaded_docs', [])))
-        if st.session_state.get('vector_db'):
-            st.metric("Vector Database", "Active")
-        st.metric("Relevance Threshold", f"{RELEVANCE_SCORE_THRESHOLD}")
-    else:
-        st.warning("Please load documents first")
-    
-    st.markdown("---")
-    st.markdown("*Made with Streamlit & LangChain*")
